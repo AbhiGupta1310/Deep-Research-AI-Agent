@@ -92,14 +92,12 @@ deep_research_agent/
 ├── frontend/                # React/Vite Frontend
 │   ├── src/                 # React components
 │   └── package.json
-├── DEPLOYMENT.md            # Deployment guide (Render/Vercel)
+├── assets/                  # Project images
+│   └── img.png
+├── pyproject.toml           # Project metadata
 └── run_app.sh               # Local startup script
 ```
 
-## Deployment
-
-This project is ready for deployment on **Render** (Backend) and **Vercel** (Frontend).
-See [DEPLOYMENT.md](DEPLOYMENT.md) for a step-by-step guide.
 
 ## Customization
 
@@ -107,6 +105,4 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for a step-by-step guide.
 - **UI Theme**: Edit `frontend/src/App.css` to customize the "Red Dark Mode" aesthetic.
 - **Research Depth**: Modify `num_results` in `backend/app/nodes.py`.
 
-## License
 
-MIT
