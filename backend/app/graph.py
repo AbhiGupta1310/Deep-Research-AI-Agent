@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, START, END
-from src.state import ReportState, ReportStateInput, ReportStateOutput, SectionState, SectionOutputState
-from src.nodes import (
+from .state import ReportState, ReportStateInput, ReportStateOutput, SectionState, SectionOutputState
+from .nodes import (
     generate_report_plan,
     generate_queries,
     search_web,

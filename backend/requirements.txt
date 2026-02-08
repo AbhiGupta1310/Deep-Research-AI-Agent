@@ -9,3 +9,5 @@ tiktoken
 rich
 markdown
 xhtml2pdf
+fastapi
+uvicorn
