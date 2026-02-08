@@ -1,18 +1,22 @@
 # Deep Research AI Agent
 
-A powerful, autonomous research agent that plans, researches, writes, and compiles comprehensive technical reports. Built with **LangGraph** and **LangChain**, it leverages **OpenRouter** to be completely model-agnostic, allowing you to use the best LLM for your needs (e.g., Gemini 2.0 Flash, Llama 3, Claude 3.5 Sonnet).
+A powerful, autonomous research agent that plans, researches, writes, and compiles comprehensive technical reports. Built with **LangGraph**, **FastAPI**, and **React**, it leverages **OpenRouter** to be completely model-agnostic.
+
+![Deep Research Agent](https://github.com/abhigupta/deep_research_agent/assets/placeholder/screenshot.png)
 
 ## Key Features
 
-- **Model Agnostic**: uses OpenRouter to support any LLM. Easily switch models via environment variables.
+- **Model Agnostic**: uses OpenRouter to support any LLM (e.g., Gemini 2.0 Flash, Llama 3).
 - **Deep Web Research**: Integrates with [Tavily](https://tavily.com/) for high-quality, real-time web search.
 - **Parallel Execution**: Uses LangGraph to research and write multiple report sections simultaneously.
+- **Live Streaming**: Real-time progress updates via Server-Sent Events (SSE).
 - **PDF Export**: Automatically compiles the final markdown report into a professional PDF document.
-- **Smart Context Management**: Implements token management and context compression to handle large research datasets without crashing.
+- **Modern UI**: A sleek, "Red Dark Mode" React interface for easy interaction.
 
 ## Prerequisites
 
 - **Python 3.10+**
+- **Node.js 18+**
 - **OpenRouter API Key**: Sign up at [OpenRouter](https://openrouter.ai/).
 - **Tavily API Key**: Sign up at [Tavily](https://tavily.com/).
 
@@ -24,61 +28,84 @@ A powerful, autonomous research agent that plans, researches, writes, and compil
     cd deep_research_agent
     ```
 
-2.  **Install dependencies:**
+2.  **Configure environment variables:**
+    Create a `.env` file in the `backend/` directory (or root, as it falls back).
     ```bash
-    pip install -r requirements.txt
-    ```
-    *Note: If you use `uv`, you can run `uv pip install -r requirements.txt`.*
-
-3.  **Configure environment variables:**
-    Create a `.env` file in the root directory (or copy `.env.example`).
-    ```bash
-    cp .env.example .env
+    cp .env.example backend/.env
     ```
     
-    Edit `.env` and add your keys:
+    Edit `backend/.env` with your keys:
     ```bash
-    # Required
     OPENROUTER_API_KEY=sk-or-your-key-here
     TAVILY_API_KEY=tvly-your-key-here
-    
-    # Optional - Default is google/gemini-2.0-flash-lite:free
-    LLM_MODEL=google/gemini-2.0-flash-lite:free
+    LLM_MODEL=google/gemini-2.0-flash-exp:free (or your preferred model)
+    ```
+
+3.  **Install Backend Dependencies:**
+    ```bash
+    cd backend
+    pip install -r requirements.txt
+    ```
+
+4.  **Install Frontend Dependencies:**
+    ```bash
+    cd ../frontend
+    npm install
     ```
 
 ## Usage
 
-Run the agent from the root directory:
+You can run the full stack using the provided helper script (Mac/Linux):
 
 ```bash
-python main.py
+./run_app.sh
 ```
-*(Or `uv run main.py` if you are using uv)*
 
-1.  Enter the **topic** you want to research (e.g., "AI Agents", "Quantum Computing", "The Future of Renewable Energy").
-2.  The agent will:
-    - Generate a comprehensive report plan.
-    - Research each section in parallel using web searches.
-    - Write detailed sections based on the research.
-    - Compile a final report in Markdown.
-    - Save the report as a **PDF** (e.g., `Topic_Name.pdf`) in the same folder.
+Or run services manually:
+
+**Backend:**
+```bash
+cd backend
+python3 -m uvicorn app.main:app --reload --port 8000
+```
+
+**Frontend:**
+```bash
+cd frontend
+npm run dev
+```
+
+Visit [http://localhost:5173](http://localhost:5173) to start researching!
 
 ## Project Structure
 
-- **`main.py`**: Entry point for the application.
-- **`src/`**:
-    - **`graph.py`**: Defines the orchestration logic using LangGraph.
-    - **`nodes.py`**: Contains the core logic for each step (planning, searching, writing).
-    - **`prompts.py`**: System prompts for the LLM to ensure high-quality output.
-    - **`utils.py`**: Utilities for Tavily search, result formatting, and PDF generation.
-    - **`state.py`**: Pydantic models and TypedDicts defining the agent's state.
+```text
+deep_research_agent/
+├── backend/                 # Python/FastAPI Backend
+│   ├── app/                 # Application logic
+│   │   ├── main.py          # API Entry point
+│   │   ├── graph.py         # LangGraph orchestration
+│   │   ├── nodes.py         # Agent nodes (planning, writing)
+│   │   └── ...
+│   ├── requirements.txt
+│   └── .env
+├── frontend/                # React/Vite Frontend
+│   ├── src/                 # React components
+│   └── package.json
+├── DEPLOYMENT.md            # Deployment guide (Render/Vercel)
+└── run_app.sh               # Local startup script
+```
+
+## Deployment
+
+This project is ready for deployment on **Render** (Backend) and **Vercel** (Frontend).
+See [DEPLOYMENT.md](DEPLOYMENT.md) for a step-by-step guide.
 
 ## Customization
 
-You can adjust parameters in `src/nodes.py` and `src/utils.py` to tune performance:
-- **Model**: Change `LLM_MODEL` in `.env` to try different models.
-- **Search Depth**: Modify `num_results` in `search_web` node.
-- **Context Limit**: Adjust `max_tokens` in `src/utils.py` to control how much research context represents.
+- **Model**: Change `LLM_MODEL` in `backend/.env`.
+- **UI Theme**: Edit `frontend/src/App.css` to customize the "Red Dark Mode" aesthetic.
+- **Research Depth**: Modify `num_results` in `backend/app/nodes.py`.
 
 ## License
 
