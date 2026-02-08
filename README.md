@@ -2,7 +2,7 @@
 
 A powerful, autonomous research agent that plans, researches, writes, and compiles comprehensive technical reports. Built with **LangGraph**, **FastAPI**, and **React**, it leverages **OpenRouter** to be completely model-agnostic.
 
-![Deep Research Agent](https://github.com/abhigupta/deep_research_agent/assets/placeholder/screenshot.png)
+![Deep Research Agent](./img.png)
 
 ## Key Features
 
