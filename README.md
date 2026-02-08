@@ -2,7 +2,7 @@
 
 A powerful, autonomous research agent that plans, researches, writes, and compiles comprehensive technical reports. Built with **LangGraph**, **FastAPI**, and **React**, it leverages **OpenRouter** to be completely model-agnostic.
 
-![Deep Research Agent](./img.png)
+![Deep Research Agent](./assets/img.png)
 
 ## Key Features
 
@@ -11,7 +11,7 @@ A powerful, autonomous research agent that plans, researches, writes, and compil
 - **Parallel Execution**: Uses LangGraph to research and write multiple report sections simultaneously.
 - **Live Streaming**: Real-time progress updates via Server-Sent Events (SSE).
 - **PDF Export**: Automatically compiles the final markdown report into a professional PDF document.
-- **Modern UI**: A sleek, "Red Dark Mode" React interface for easy interaction.
+
 
 ## Prerequisites
 
