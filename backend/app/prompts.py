@@ -111,17 +111,17 @@ Guidelines for writing:
   * List each source with title, date, and URL
   * Format: `- Title : https://source-url.com` (use the ACTUAL URL from the source context, do not use the word "URL")
 
-3. Writing Approach:
+4. Writing Approach:
 - Include at least one specific example or case study if available
 - Use concrete details over general statements
 - Make every word count
 - No preamble prior to creating the section content
 - Focus on your single most important point
 
-4. Use this source material obtained from web searches to help write the section:
+5. Use this source material obtained from web searches to help write the section:
 {context}
 
-5. Quality Checks:
+6. Quality Checks:
 - Format should be Markdown
 - Exactly 150-200 words (excluding title and sources)
 - Careful use of only ONE structural element (table or bullet list) and only if it helps clarify your point
@@ -155,7 +155,7 @@ For Introduction:
 - Include NO structural elements (no lists or tables)
 - No sources section needed
 
-For Conclusion/Summary:
+2.For Conclusion/Summary:
 - Use ## for section title (Markdown format)
 - 100-150 word limit
 - For comparative reports:
