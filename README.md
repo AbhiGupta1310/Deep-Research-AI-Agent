@@ -2,7 +2,7 @@
 
 A powerful, autonomous research agent that plans, researches, writes, and compiles comprehensive technical reports. Built with **LangGraph**, **FastAPI**, and **React**, it leverages **OpenRouter** to be completely model-agnostic.
 
-![Deep Research Agent](https://github.com/abhigupta/deep_research_agent/assets/placeholder/screenshot.png)
+![Deep Research Agent](./assets/img.png)
 
 ## Key Features
 
@@ -11,7 +11,6 @@ A powerful, autonomous research agent that plans, researches, writes, and compil
 - **Parallel Execution**: Uses LangGraph to research and write multiple report sections simultaneously.
 - **Live Streaming**: Real-time progress updates via Server-Sent Events (SSE).
 - **PDF Export**: Automatically compiles the final markdown report into a professional PDF document.
-- **Modern UI**: A sleek, "Red Dark Mode" React interface for easy interaction.
 
 ## Prerequisites
 
@@ -23,6 +22,7 @@ A powerful, autonomous research agent that plans, researches, writes, and compil
 ## Setup
 
 1.  **Clone the repository:**
+
     ```bash
     git clone https://github.com/abhigupta/deep_research_agent.git
     cd deep_research_agent
@@ -30,11 +30,13 @@ A powerful, autonomous research agent that plans, researches, writes, and compil
 
 2.  **Configure environment variables:**
     Create a `.env` file in the `backend/` directory (or root, as it falls back).
+
     ```bash
     cp .env.example backend/.env
     ```
-    
+
     Edit `backend/.env` with your keys:
+
     ```bash
     OPENROUTER_API_KEY=sk-or-your-key-here
     TAVILY_API_KEY=tvly-your-key-here
@@ -42,6 +44,7 @@ A powerful, autonomous research agent that plans, researches, writes, and compil
     ```
 
 3.  **Install Backend Dependencies:**
+
     ```bash
     cd backend
     pip install -r requirements.txt
@@ -64,12 +67,14 @@ You can run the full stack using the provided helper script (Mac/Linux):
 Or run services manually:
 
 **Backend:**
+
 ```bash
 cd backend
 python3 -m uvicorn app.main:app --reload --port 8000
 ```
 
 **Frontend:**
+
 ```bash
 cd frontend
 npm run dev
@@ -98,11 +103,8 @@ deep_research_agent/
 └── run_app.sh               # Local startup script
 ```
 
-
 ## Customization
 
 - **Model**: Change `LLM_MODEL` in `backend/.env`.
 - **UI Theme**: Edit `frontend/src/App.css` to customize the "Red Dark Mode" aesthetic.
 - **Research Depth**: Modify `num_results` in `backend/app/nodes.py`.
-
-
