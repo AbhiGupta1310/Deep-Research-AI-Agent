@@ -1,0 +1,484 @@
+"""
+Output Compiler + Multi-Format Renderer — Phase 9.
+
+Produces multi-format output from the final report state:
+  - PDF via WeasyPrint (HTML → PDF)
+  - Markdown with inline citations and confidence flags
+  - JSON structured data (sections, sources, scores)
+  - ChromaDB mini store for follow-up chat
+  - Redis cache storage for future cache hits
+  - LangSmith run metadata (runtime, cost, section scores, reflection counts)
+"""
+
+import os
+import re
+import json
+import time
+import logging
+from typing import Dict, Any, Optional, List
+from datetime import datetime
+
+import markdown as md_lib
+
+from .state import ReportState
+
+logger = logging.getLogger(__name__)
+
+
+class OutputCompiler:
+    """
+    Compiles the final research report into multiple output formats
+    and persists results to disk, cache, and vector store.
+    """
+
+    def __init__(self, output_dir: str = None):
+        self._output_dir = output_dir or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "outputs"
+        )
+        os.makedirs(self._output_dir, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # Main compile entry point
+    # ------------------------------------------------------------------
+    async def compile(
+        self,
+        report_content: str,
+        report_id: str,
+        topic: str,
+        sections: list = None,
+        sources: list = None,
+        confidence_scores: dict = None,
+        fact_check_flags: list = None,
+        reflection_counts: dict = None,
+        start_time: float = None,
+    ) -> Dict[str, Any]:
+        """
+        Compile the report into all output formats and persist everywhere.
+
+        Returns:
+            Dict with paths, URLs, and metadata for each output format.
+        """
+        runtime_seconds = round(time.time() - start_time, 2) if start_time else 0.0
+        safe_name = self._sanitize_filename(topic)
+        generated_at = datetime.now().isoformat()
+
+        result: Dict[str, Any] = {
+            "report_id": report_id,
+            "topic": topic,
+            "generated_at": generated_at,
+        }
+
+        # --- 1. Markdown with confidence flags ---
+        md_content = self._inject_confidence_flags(
+            report_content, confidence_scores or {}
+        )
+        md_path = os.path.join(self._output_dir, f"{safe_name}.md")
+        self._write_file(md_path, md_content)
+        result["markdown_path"] = md_path
+        result["markdown_filename"] = f"{safe_name}.md"
+        result["markdown_content"] = md_content
+
+        # --- 2. PDF via WeasyPrint ---
+        pdf_path = os.path.join(self._output_dir, f"{safe_name}.pdf")
+        pdf_ok = self._generate_pdf(md_content, pdf_path)
+        if pdf_ok:
+            result["pdf_path"] = pdf_path
+            result["pdf_filename"] = f"{safe_name}.pdf"
+            result["pdf_url"] = f"/api/reports/{safe_name}.pdf"
+
+        # --- 3. JSON structured data ---
+        json_data = self._build_json_report(
+            report_id=report_id,
+            topic=topic,
+            generated_at=generated_at,
+            content=md_content,
+            sections=sections,
+            sources=sources,
+            confidence_scores=confidence_scores,
+            fact_check_flags=fact_check_flags,
+            reflection_counts=reflection_counts,
+            runtime_seconds=runtime_seconds,
+        )
+        json_path = os.path.join(self._output_dir, f"{safe_name}.json")
+        self._write_file(json_path, json.dumps(json_data, indent=2, ensure_ascii=False, default=str))
+        result["json_path"] = json_path
+        result["json_filename"] = f"{safe_name}.json"
+        result["json_data"] = json_data
+
+        # --- 4. ChromaDB mini store for follow-up chat ---
+        result["chat_enabled"] = await self._embed_to_chromadb(report_id, md_content)
+
+        # --- 5. Redis cache for future hits ---
+        await self._store_in_redis(topic, result)
+
+        # --- 6. LangSmith run metadata ---
+        self._write_langsmith_metadata(
+            report_id=report_id,
+            topic=topic,
+            runtime_seconds=runtime_seconds,
+            confidence_scores=confidence_scores or {},
+            reflection_counts=reflection_counts or {},
+            section_count=len(sections) if sections else 0,
+            source_count=len(sources) if sources else 0,
+            fact_flag_count=len(fact_check_flags) if fact_check_flags else 0,
+        )
+
+        # Attach summary metadata to result
+        result["confidence_scores"] = confidence_scores or {}
+        result["source_count"] = len(sources) if sources else 0
+        result["runtime_seconds"] = runtime_seconds
+
+        logger.info(f"[OutputCompiler] All outputs compiled for '{topic[:50]}' in {runtime_seconds}s")
+        return result
+
+    # ------------------------------------------------------------------
+    # Markdown — inject per-section confidence flags
+    # ------------------------------------------------------------------
+    def _inject_confidence_flags(
+        self, content: str, confidence_scores: dict
+    ) -> str:
+        """Prepend confidence badges to section headers in the markdown."""
+        if not confidence_scores:
+            return content
+
+        lines = content.split("\n")
+        output_lines = []
+        for line in lines:
+            # Match ## Section Name headers
+            match = re.match(r"^(#{1,3})\s+(.+)$", line)
+            if match:
+                level, name = match.group(1), match.group(2)
+                # Find matching confidence score (fuzzy match on section name)
+                score = self._find_score(name, confidence_scores)
+                if score is not None:
+                    badge = "✅" if score >= 70 else "⚠️"
+                    line = f"{level} {badge} {name} ({score:.0f}% confidence)"
+            output_lines.append(line)
+
+        return "\n".join(output_lines)
+
+    @staticmethod
+    def _find_score(header_name: str, scores: dict) -> Optional[float]:
+        """Fuzzy-match a header name against confidence score keys."""
+        header_lower = header_name.lower().strip()
+        for key, score in scores.items():
+            if key.lower().strip() in header_lower or header_lower in key.lower().strip():
+                return float(score)
+        return None
+
+    # ------------------------------------------------------------------
+    # PDF — WeasyPrint (HTML → PDF)
+    # ------------------------------------------------------------------
+    def _generate_pdf(self, markdown_content: str, filepath: str) -> bool:
+        """Convert markdown to PDF using WeasyPrint."""
+        try:
+            from weasyprint import HTML
+
+            html_body = md_lib.markdown(
+                markdown_content,
+                extensions=["tables", "fenced_code", "codehilite"],
+            )
+
+            full_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {{
+            font-family: 'Inter', Helvetica, Arial, sans-serif;
+            font-size: 11pt;
+            line-height: 1.6;
+            color: #1a1a1a;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px;
+        }}
+        h1 {{ color: #111; font-size: 24pt; border-bottom: 2px solid #e5e5e5; padding-bottom: 8px; }}
+        h2 {{ color: #222; font-size: 18pt; margin-top: 24px; }}
+        h3 {{ color: #333; font-size: 14pt; }}
+        p {{ margin-bottom: 12px; }}
+        code {{
+            background-color: #f4f4f5;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 10pt;
+        }}
+        pre {{
+            background-color: #f4f4f5;
+            padding: 16px;
+            border-radius: 8px;
+            overflow-x: auto;
+        }}
+        table {{
+            border-collapse: collapse;
+            width: 100%;
+            margin: 16px 0;
+        }}
+        th, td {{
+            border: 1px solid #d4d4d8;
+            padding: 8px 12px;
+            text-align: left;
+        }}
+        th {{ background-color: #f4f4f5; font-weight: 600; }}
+        blockquote {{
+            border-left: 4px solid #3b82f6;
+            padding-left: 16px;
+            margin-left: 0;
+            color: #4b5563;
+        }}
+        .confidence-high {{ color: #16a34a; font-weight: 600; }}
+        .confidence-low {{ color: #dc2626; font-weight: 600; }}
+    </style>
+</head>
+<body>
+    {html_body}
+</body>
+</html>"""
+
+            HTML(string=full_html).write_pdf(filepath)
+            logger.info(f"[OutputCompiler] PDF saved → {filepath}")
+            return True
+
+        except ImportError:
+            logger.warning("[OutputCompiler] WeasyPrint not installed — PDF skipped.")
+            return False
+        except Exception as e:
+            logger.error(f"[OutputCompiler] PDF generation failed: {e}")
+            return False
+
+    # ------------------------------------------------------------------
+    # JSON — structured report data
+    # ------------------------------------------------------------------
+    def _build_json_report(
+        self,
+        report_id: str,
+        topic: str,
+        generated_at: str,
+        content: str,
+        sections: list = None,
+        sources: list = None,
+        confidence_scores: dict = None,
+        fact_check_flags: list = None,
+        reflection_counts: dict = None,
+        runtime_seconds: float = 0.0,
+    ) -> dict:
+        """Build a structured JSON representation of the report."""
+        # Serialize sections
+        serialized_sections = []
+        for s in (sections or []):
+            if hasattr(s, "model_dump"):
+                serialized_sections.append(s.model_dump())
+            elif hasattr(s, "dict"):
+                serialized_sections.append(s.dict())
+            elif isinstance(s, dict):
+                serialized_sections.append(s)
+            else:
+                serialized_sections.append({"name": str(s)})
+
+        # Serialize sources
+        serialized_sources = []
+        for src in (sources or []):
+            if hasattr(src, "model_dump"):
+                serialized_sources.append(src.model_dump())
+            elif hasattr(src, "dict"):
+                serialized_sources.append(src.dict())
+            elif isinstance(src, dict):
+                serialized_sources.append(src)
+
+        return {
+            "report_id": report_id,
+            "topic": topic,
+            "generated_at": generated_at,
+            "runtime_seconds": runtime_seconds,
+            "content": content,
+            "sections": serialized_sections,
+            "sources": serialized_sources,
+            "confidence_scores": confidence_scores or {},
+            "fact_check_flags": fact_check_flags or [],
+            "reflection_counts": reflection_counts or {},
+            "metadata": {
+                "section_count": len(serialized_sections),
+                "source_count": len(serialized_sources),
+                "flagged_claims": len(fact_check_flags) if fact_check_flags else 0,
+            },
+        }
+
+    # ------------------------------------------------------------------
+    # ChromaDB — embed report chunks for follow-up chat
+    # ------------------------------------------------------------------
+    async def _embed_to_chromadb(self, report_id: str, content: str) -> bool:
+        """Embed report chunks into ChromaDB for RAG-based follow-up chat."""
+        try:
+            from .chat.followup import FollowupChatHandler
+            handler = FollowupChatHandler()
+            ok = await handler.embed_report(report_id, content)
+            if ok:
+                logger.info(f"[OutputCompiler] ChromaDB embedded for report {report_id}")
+            return ok
+        except Exception as e:
+            logger.warning(f"[OutputCompiler] ChromaDB embedding failed: {e}")
+            return False
+
+    # ------------------------------------------------------------------
+    # Redis — cache compiled outputs
+    # ------------------------------------------------------------------
+    async def _store_in_redis(self, topic: str, result: dict) -> None:
+        """Store the compiled output in Redis semantic cache."""
+        try:
+            from .cache.redis_cache import SemanticCache
+            cache = SemanticCache()
+            # Store the markdown content + metadata (exclude binary paths)
+            cache_payload = {
+                "content": result.get("markdown_content", ""),
+                "report_id": result.get("report_id", ""),
+                "confidence_scores": result.get("confidence_scores", {}),
+                "json_data": result.get("json_data", {}),
+                "generated_at": result.get("generated_at", ""),
+            }
+            await cache.store_result(topic, cache_payload)
+            logger.info(f"[OutputCompiler] Redis cached for '{topic[:50]}'")
+        except Exception as e:
+            logger.warning(f"[OutputCompiler] Redis caching failed: {e}")
+
+    # ------------------------------------------------------------------
+    # LangSmith — write run metadata
+    # ------------------------------------------------------------------
+    def _write_langsmith_metadata(
+        self,
+        report_id: str,
+        topic: str,
+        runtime_seconds: float,
+        confidence_scores: dict,
+        reflection_counts: dict,
+        section_count: int,
+        source_count: int,
+        fact_flag_count: int,
+    ) -> None:
+        """
+        Write LangSmith run metadata. Attempts to tag the active LangSmith
+        run if available, otherwise logs metadata locally.
+        """
+        metadata = {
+            "report_id": report_id,
+            "topic": topic,
+            "runtime_seconds": runtime_seconds,
+            "cost_estimate_usd": self._estimate_cost(section_count),
+            "section_count": section_count,
+            "source_count": source_count,
+            "flagged_claims": fact_flag_count,
+            "confidence_scores": confidence_scores,
+            "reflection_counts": reflection_counts,
+            "avg_confidence": (
+                round(sum(confidence_scores.values()) / len(confidence_scores), 1)
+                if confidence_scores else 0.0
+            ),
+        }
+
+        # Try to write to the active LangSmith run
+        try:
+            from langsmith import Client as LangSmithClient
+            ls = LangSmithClient()
+            langsmith_run_id = os.getenv("LANGCHAIN_RUN_ID")
+            if langsmith_run_id:
+                ls.update_run(langsmith_run_id, extra={"output_metadata": metadata})
+                logger.info("[OutputCompiler] LangSmith metadata written to active run.")
+                return
+        except Exception:
+            pass
+
+        # Fallback: write metadata to a local JSON file
+        meta_path = os.path.join(self._output_dir, f"{report_id}_metadata.json")
+        try:
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(metadata, f, indent=2, ensure_ascii=False, default=str)
+            logger.info(f"[OutputCompiler] LangSmith metadata saved locally → {meta_path}")
+        except Exception as e:
+            logger.warning(f"[OutputCompiler] Failed to save metadata: {e}")
+
+    @staticmethod
+    def _estimate_cost(section_count: int) -> float:
+        """
+        Rough cost estimate per research run.
+        Based on: cheap calls (~$0.0003) × (planning + per-section nodes)
+                + mid calls (~$0.001) × sections
+                + premium call (~$0.015) × 1
+        """
+        cheap_calls = 2 + section_count * 4   # HyDE, plan, + 4 per section (rewrite, search, write, critic)
+        mid_calls = section_count              # section writing
+        premium_calls = 1                      # final synthesis
+        return round(
+            cheap_calls * 0.0003 + mid_calls * 0.001 + premium_calls * 0.015, 4
+        )
+
+    # ------------------------------------------------------------------
+    # Utilities
+    # ------------------------------------------------------------------
+    def _write_file(self, filepath: str, content: str) -> None:
+        """Write string content to a file."""
+        try:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(content)
+            logger.info(f"[OutputCompiler] Saved → {filepath}")
+        except Exception as e:
+            logger.error(f"[OutputCompiler] Error writing {filepath}: {e}")
+
+    @staticmethod
+    def _sanitize_filename(topic: str) -> str:
+        """Sanitize topic string for use as a filename."""
+        name = re.sub(r'[\\/*?:"<>|]', "", topic)
+        name = name.replace(" ", "_")
+        return name[:50]
+
+
+# ==============================================================
+# Graph Node — wired into LangGraph as the terminal node
+# ==============================================================
+
+async def output_compiler_node(state: ReportState) -> dict:
+    """
+    LangGraph node that compiles the final report into all output formats.
+
+    Wired as: final_synthesis_writer → output_compiler → END
+
+    Reads from state:
+        final_report, topic, sections, sources,
+        confidence_scores, fact_check_flags, reflection_count
+    Writes to state:
+        output_metadata (dict with all output paths and data)
+    """
+    from .chat.followup import FollowupChatHandler
+
+    compiler = OutputCompiler()
+    report_id = FollowupChatHandler.generate_report_id()
+
+    final_report = state.get("final_report", "")
+    topic = state.get("topic", "Research Report")
+    sections = state.get("sections", [])
+    sources = state.get("sources", [])
+    confidence_scores = state.get("confidence_scores", {})
+    fact_check_flags = state.get("fact_check_flags", [])
+    reflection_counts = state.get("reflection_count", {})
+
+    logger.info("--- Output Compiler Node ---")
+
+    result = await compiler.compile(
+        report_content=final_report,
+        report_id=report_id,
+        topic=topic,
+        sections=sections,
+        sources=sources,
+        confidence_scores=confidence_scores,
+        fact_check_flags=fact_check_flags,
+        reflection_counts=reflection_counts,
+        start_time=None,  # Runtime tracked per-session in main.py
+    )
+
+    logger.info(f"--- Output Compiler Complete (report_id={report_id}) ---")
+
+    return {
+        "output_metadata": result,
+        "final_report": final_report,  # Pass through unchanged
+    }

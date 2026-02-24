@@ -1,13 +1,40 @@
+# Core LLM & Orchestration
 langchain
 langchain-openai
 langchain-community
 langgraph
-tavily-python
 pydantic
 python-dotenv
 tiktoken
-rich
-markdown
-xhtml2pdf
+
+# API Server
 fastapi
 uvicorn
+sse-starlette
+httpx
+
+# Search Providers
+tavily-python
+arxiv
+wikipedia-api
+newsapi-python
+
+# Cache & Vector Store
+redis[hiredis]
+chromadb
+
+# Embeddings
+openai
+numpy
+
+# Output & Formatting
+weasyprint
+markdown
+rich
+
+# Observability
+langsmith
+
+# Testing
+pytest
+pytest-asyncio

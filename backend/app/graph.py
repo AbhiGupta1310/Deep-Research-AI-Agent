@@ -1,53 +1,111 @@
 from langgraph.graph import StateGraph, START, END
 from .state import ReportState, ReportStateInput, ReportStateOutput, SectionState, SectionOutputState
 from .nodes import (
+    query_analyzer_hyde,
+    route_after_hyde,
     generate_report_plan,
-    generate_queries,
-    search_web,
+    query_rewriter_expander,
+    multi_source_search,
+    result_merger_ranker,
     write_section,
+    critic_agent,
+    should_reflect,
     parallelize_section_writing,
-    format_completed_sections,
-    write_final_sections,
-    parallelize_final_section_writing,
-    compile_final_report
+    aggregator_deduplicator,
+    fact_checker,
+    final_synthesis_writer,
 )
+from .output_compiler import output_compiler_node
+
 
 def create_section_builder_subagent():
-    # Add nodes and edges
-    section_builder = StateGraph(SectionState, output=SectionOutputState)
-    section_builder.add_node("generate_queries", generate_queries)
-    section_builder.add_node("search_web", search_web)
-    section_builder.add_node("write_section", write_section)
+    """
+    Create the section builder subagent with a reflection loop.
 
-    section_builder.add_edge(START, "generate_queries")
-    section_builder.add_edge("generate_queries", "search_web")
-    section_builder.add_edge("search_web", "write_section")
-    section_builder.add_edge("write_section", END)
-    
+    Flow:
+        START → query_rewriter_expander → multi_source_search → result_merger_ranker
+              → write_section → critic_agent
+                                    ↓
+                          should_reflect?
+                         ↙              ↘
+       query_rewriter_expander (loop)    END (approved)
+    """
+    section_builder = StateGraph(SectionState, output=SectionOutputState)
+
+    section_builder.add_node("query_rewriter_expander", query_rewriter_expander)
+    section_builder.add_node("multi_source_search", multi_source_search)
+    section_builder.add_node("result_merger_ranker", result_merger_ranker)
+    section_builder.add_node("write_section", write_section)
+    section_builder.add_node("critic_agent", critic_agent)
+
+    section_builder.add_edge(START, "query_rewriter_expander")
+    section_builder.add_edge("query_rewriter_expander", "multi_source_search")
+    section_builder.add_edge("multi_source_search", "result_merger_ranker")
+    section_builder.add_edge("result_merger_ranker", "write_section")
+    section_builder.add_edge("write_section", "critic_agent")
+
+    section_builder.add_conditional_edges(
+        "critic_agent",
+        should_reflect,
+        {
+            "generate_queries": "query_rewriter_expander",
+            "__end__": END,
+        }
+    )
+
     return section_builder.compile()
 
+
 def create_reporter_agent():
+    """
+    Create the main reporter agent graph — v2.0 final structure.
+
+    Flow:
+        START → query_analyzer_hyde
+             → [cache hit?] → output_compiler (short-circuit)
+             → [cache miss] → generate_report_plan
+             → [fan-out] section_builder (×N sections in parallel)
+             → aggregator_deduplicator
+             → fact_checker
+             → final_synthesis_writer (Claude Sonnet — 1 call)
+             → output_compiler → END
+    """
     section_builder_subagent = create_section_builder_subagent()
-    
+
     builder = StateGraph(ReportState, input=ReportStateInput, output=ReportStateOutput)
 
+    builder.add_node("query_analyzer_hyde", query_analyzer_hyde)
     builder.add_node("generate_report_plan", generate_report_plan)
     builder.add_node("section_builder_with_web_search", section_builder_subagent)
-    builder.add_node("format_completed_sections", format_completed_sections)
-    builder.add_node("write_final_sections", write_final_sections)
-    builder.add_node("compile_final_report", compile_final_report)
+    builder.add_node("aggregator_deduplicator", aggregator_deduplicator)
+    builder.add_node("fact_checker", fact_checker)
+    builder.add_node("final_synthesis_writer", final_synthesis_writer)
+    builder.add_node("output_compiler", output_compiler_node)
 
-    builder.add_edge(START, "generate_report_plan")
-    builder.add_conditional_edges("generate_report_plan", 
-                                  parallelize_section_writing, 
+    # START → HyDE analyzer
+    builder.add_edge(START, "query_analyzer_hyde")
+
+    # HyDE → cache check: short-circuit if cached
+    builder.add_conditional_edges(
+        "query_analyzer_hyde",
+        route_after_hyde,
+        {
+            "generate_report_plan": "generate_report_plan",
+            "compile_final_report": "output_compiler",
+        }
+    )
+
+    # Normal flow
+    builder.add_conditional_edges("generate_report_plan",
+                                  parallelize_section_writing,
                                   ["section_builder_with_web_search"])
-    builder.add_edge("section_builder_with_web_search", "format_completed_sections")
-    builder.add_conditional_edges("format_completed_sections", 
-                                  parallelize_final_section_writing, 
-                                  ["write_final_sections"])
-    builder.add_edge("write_final_sections", "compile_final_report")
-    builder.add_edge("compile_final_report", END)
+    builder.add_edge("section_builder_with_web_search", "aggregator_deduplicator")
+    builder.add_edge("aggregator_deduplicator", "fact_checker")
+    builder.add_edge("fact_checker", "final_synthesis_writer")
+    builder.add_edge("final_synthesis_writer", "output_compiler")
+    builder.add_edge("output_compiler", END)
 
     return builder.compile()
+
 
 reporter_agent = create_reporter_agent()

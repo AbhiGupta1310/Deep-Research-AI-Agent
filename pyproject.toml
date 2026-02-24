@@ -5,17 +5,35 @@ description = "Autonomous research agent using LangGraph and FastAPI"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    # Core LLM & Orchestration
     "fastapi>=0.109.0",
     "uvicorn>=0.27.0",
     "langgraph>=0.0.10",
     "langchain>=0.1.0",
     "langchain-openai>=0.0.5",
     "langchain-community>=0.0.10",
-    "tavily-python>=0.3.0",
     "python-dotenv>=1.0.0",
-    "pdfkit>=1.0.0",
+    "pydantic>=2.0.0",
+    "tiktoken>=0.5.0",
+    # API Server
+    "sse-starlette>=1.6.0",
+    "httpx>=0.25.0",
+    # Search Providers
+    "tavily-python>=0.3.0",
+    "arxiv>=2.1.0",
+    "wikipedia-api>=0.6.0",
+    "newsapi-python>=0.2.7",
+    # Cache & Vector Store
+    "redis[hiredis]>=5.0.0",
+    "chromadb>=0.4.0",
+    # Embeddings
+    "openai>=1.0.0",
+    "numpy>=1.24.0",
+    # Output & Formatting
+    "weasyprint>=60.0",
     "markdown>=3.5.0",
-    "aiofiles>=23.2.1"
+    # Observability
+    "langsmith>=0.1.0",
 ]
 
 [tool.setuptools.packages.find]
