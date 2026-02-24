@@ -1,8 +1,13 @@
 __pycache__/
 *.pyc
 .env
+backend/.env
+frontend/.env
 .venv/
 venv/
 .DS_Store
 .ipynb_checkpoints/
 outputs/
+.langgraph_api/
+*.egg-info/
+node_modules/
