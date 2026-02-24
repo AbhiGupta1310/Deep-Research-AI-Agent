@@ -2,6 +2,8 @@
 
 A fully autonomous, multi-source research agent that generates publication-quality reports on any topic. Built on LangGraph for stateful orchestration, it combines five search providers, a three-tier LLM hierarchy, iterative self-critique, fact-checking, and multi-format output compilation into a single end-to-end pipeline. A React frontend streams real-time progress via Server-Sent Events and provides follow-up chat over the generated report.
 
+![Deep Research Agent Overview](assets/img1.png)
+
 ---
 
 ## Table of Contents

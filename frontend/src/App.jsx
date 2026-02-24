@@ -18,8 +18,24 @@ import {
   Sparkles,
   Settings,
   BookOpen,
+  Zap,
+  Brain,
+  FileCheck,
+  ArrowRight,
 } from "lucide-react";
 import "./App.css";
+
+// Rotating placeholder topics
+const PLACEHOLDER_TOPICS = [
+  "Quantum computing breakthroughs in 2025...",
+  "Impact of AI on healthcare diagnostics...",
+  "Climate change mitigation strategies...",
+  "The future of space exploration...",
+  "Advances in CRISPR gene editing...",
+  "Decentralized finance and Web3...",
+  "Neuromorphic computing architectures...",
+  "Sustainable energy storage solutions...",
+];
 
 function App() {
   const [topic, setTopic] = useState("");
@@ -47,6 +63,11 @@ function App() {
   const [costEstimate, setCostEstimate] = useState(0);
   const [jsonReport, setJsonReport] = useState(null);
 
+  // Rotating placeholder
+  const [placeholderIndex, setPlaceholderIndex] = useState(0);
+  const [placeholderText, setPlaceholderText] = useState("");
+  const [isTyping, setIsTyping] = useState(true);
+
   const chatEndRef = useRef(null);
   const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -54,10 +75,43 @@ function App() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);
 
+  // Typewriter effect for placeholder
+  useEffect(() => {
+    const currentTopic = PLACEHOLDER_TOPICS[placeholderIndex];
+    let charIndex = 0;
+    let timeout;
+
+    if (isTyping) {
+      timeout = setInterval(() => {
+        if (charIndex <= currentTopic.length) {
+          setPlaceholderText(currentTopic.slice(0, charIndex));
+          charIndex++;
+        } else {
+          clearInterval(timeout);
+          setTimeout(() => setIsTyping(false), 2000);
+        }
+      }, 50);
+    } else {
+      timeout = setInterval(() => {
+        if (charIndex < currentTopic.length) {
+          setPlaceholderText(
+            currentTopic.slice(0, currentTopic.length - charIndex),
+          );
+          charIndex++;
+        } else {
+          clearInterval(timeout);
+          setPlaceholderIndex((prev) => (prev + 1) % PLACEHOLDER_TOPICS.length);
+          setIsTyping(true);
+        }
+      }, 30);
+    }
+
+    return () => clearInterval(timeout);
+  }, [placeholderIndex, isTyping]);
+
   // Extract executive summary from report content
   const executiveSummary = useMemo(() => {
     if (!reportContent) return null;
-    // Try to find the executive summary section
     const patterns = [
       /## Executive Summary\n([\s\S]*?)(?=\n## )/i,
       /# Executive Summary\n([\s\S]*?)(?=\n#+ )/i,
@@ -176,7 +230,6 @@ function App() {
       },
     ]);
 
-    // Handle report_ready event
     if (type === "report_ready" && data) {
       setReportContent(data.content || data.markdown_content);
       setReportId(data.report_id);
@@ -249,314 +302,468 @@ function App() {
   ];
 
   return (
-    <div className="container">
-      <header className="header">
-        <h1>Deep Research Agent</h1>
-        <p className="subtitle">
-          AI-powered deep research with real-time progress tracking
-        </p>
-        <span className="version-badge">v2.0</span>
-      </header>
-
-      {/* Search Card */}
-      <div className="card">
-        <div className="input-group">
-          <input
-            type="text"
-            placeholder="What would you like to research?"
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleResearch()}
-          />
-          <select
-            className="depth-select"
-            value={depth}
-            onChange={(e) => setDepth(e.target.value)}
-            title="Research depth"
-          >
-            <option value="quick">Quick</option>
-            <option value="deep">Deep</option>
-          </select>
-          <select
-            className="format-select"
-            value={outputFormat}
-            onChange={(e) => setOutputFormat(e.target.value)}
-            title="Output format"
-          >
-            <option value="both">PDF + MD</option>
-            <option value="pdf">PDF Only</option>
-            <option value="markdown">Markdown Only</option>
-          </select>
-          <button onClick={handleResearch} disabled={loading}>
-            {loading ? (
-              <Loader2 className="spinner-icon" size={18} />
-            ) : (
-              <Search size={18} />
-            )}
-            {loading ? "Researching..." : "Research"}
-          </button>
+    <>
+      {/* Animated Background */}
+      <div className="app-bg">
+        <div className="orb orb-1"></div>
+        <div className="orb orb-2"></div>
+        <div className="orb orb-3"></div>
+        <div className="orb orb-4"></div>
+        {/* Floating particles */}
+        <div className="particles">
+          {[...Array(20)].map((_, i) => (
+            <div key={i} className={`particle particle-${i + 1}`}></div>
+          ))}
         </div>
+        {/* Grid pattern overlay */}
+        <div className="grid-overlay"></div>
       </div>
 
-      {error && (
-        <div className="error-banner">
-          <span>❌</span> {error}
-        </div>
-      )}
+      <div className="container">
+        {/* Hero Header */}
+        <header className="header">
+          {/* Glowing Arc */}
+          <div className="glow-arc">
+            {[...Array(16)].map((_, i) => (
+              <div key={i} className={`arc-dot arc-dot-${i + 1}`}></div>
+            ))}
+          </div>
 
-      {/* Progress Timeline */}
-      {progressSteps.length > 0 && (
-        <div className="progress-timeline">
-          <h3 className="timeline-title">Research Progress</h3>
-          <div className="timeline-steps">
-            {progressSteps.map((step) => (
-              <div
-                key={step.id}
-                className={`timeline-step ${step.type === "error" ? "step-error" : ""}`}
+          <h1>Deep Research Agent</h1>
+          <p className="subtitle">
+            AI-powered deep research with multi-source search, real-time
+            streaming, and publication-quality reports
+          </p>
+          <span className="version-badge">v2.0</span>
+
+          {/* Feature Pills */}
+          <div className="feature-pills">
+            <div className="feature-pill">
+              <span className="feature-pill-icon">🔍</span>5 Search Providers
+            </div>
+            <div className="feature-pill">
+              <span className="feature-pill-icon">🧠</span>
+              3-Tier LLM Hierarchy
+            </div>
+            <div className="feature-pill">
+              <span className="feature-pill-icon">⚡</span>
+              Real-Time Streaming
+            </div>
+            <div className="feature-pill">
+              <span className="feature-pill-icon">🔬</span>
+              Fact Checking
+            </div>
+            <div className="feature-pill">
+              <span className="feature-pill-icon">💬</span>
+              Follow-up Chat
+            </div>
+          </div>
+        </header>
+
+        {/* Search Card with Animated Border */}
+        <div className="card-wrapper">
+          <div className="card-glow"></div>
+          <div className="card">
+            <div className="input-group">
+              <input
+                type="text"
+                placeholder={topic ? "" : placeholderText + "│"}
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleResearch()}
+              />
+              <select
+                className="depth-select"
+                value={depth}
+                onChange={(e) => setDepth(e.target.value)}
+                title="Research depth"
               >
-                <span className="step-icon">{step.icon}</span>
-                <span className="step-message">{step.message}</span>
-                {step.data?.sections && (
-                  <span className="step-badge">
-                    {step.data.sections.length} sections
-                  </span>
+                <option value="quick">Quick</option>
+                <option value="deep">Deep</option>
+              </select>
+              <select
+                className="format-select"
+                value={outputFormat}
+                onChange={(e) => setOutputFormat(e.target.value)}
+                title="Output format"
+              >
+                <option value="both">PDF + MD</option>
+                <option value="pdf">PDF Only</option>
+                <option value="markdown">Markdown Only</option>
+              </select>
+              <button onClick={handleResearch} disabled={loading}>
+                {loading ? (
+                  <Loader2 className="spinner-icon" size={18} />
+                ) : (
+                  <Search size={18} />
                 )}
-                {step.data?.confidence_score && (
-                  <span className="confidence-badge">
-                    {Math.round(step.data.confidence_score)}%
-                  </span>
-                )}
-                <span className="step-time">{step.timestamp}</span>
-              </div>
-            ))}
-            {loading && (
-              <div className="timeline-step step-active">
-                <span className="step-icon">
-                  <Loader2 size={16} className="spinner-icon" />
-                </span>
-                <span className="step-message">Processing...</span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Report Display */}
-      {reportContent && (
-        <div className="report-container">
-          <div className="report-header">
-            <h2>
-              <Search size={18} /> Research Report: {topic}
-            </h2>
-            <div className="report-actions">
-              {reportUrl && (
-                <button
-                  className="action-btn"
-                  onClick={handleDownload}
-                  title="Download PDF"
-                >
-                  <Download size={16} /> PDF
-                </button>
-              )}
-              {chatEnabled && (
-                <button
-                  className="action-btn chat-btn"
-                  onClick={() => setChatOpen(!chatOpen)}
-                  title="Ask questions about this report"
-                >
-                  <MessageCircle size={16} /> Chat
-                </button>
-              )}
+                {loading ? "Researching..." : "Research"}
+              </button>
             </div>
           </div>
+        </div>
 
-          {/* Report Metadata Bar */}
-          {(runtimeSeconds > 0 ||
-            sourceCount > 0 ||
-            avgConfidence !== null) && (
-            <div className="report-meta-bar">
-              {runtimeSeconds > 0 && (
-                <div className="meta-chip">
-                  <Clock size={13} />
-                  <span>{runtimeSeconds.toFixed(1)}s</span>
+        {/* How It Works — Pipeline Visualization */}
+        {!reportContent && !loading && progressSteps.length === 0 && (
+          <div className="pipeline-section">
+            <h3 className="pipeline-title">How It Works</h3>
+            <div className="pipeline-steps">
+              <div className="pipeline-step">
+                <div className="pipeline-icon">
+                  <Search size={22} />
                 </div>
-              )}
-              {sourceCount > 0 && (
-                <div className="meta-chip">
-                  <Database size={13} />
-                  <span>{sourceCount} sources</span>
+                <div className="pipeline-label">Analyze Query</div>
+                <div className="pipeline-desc">
+                  HyDE anchoring & cache check
                 </div>
-              )}
-              {avgConfidence !== null && (
+              </div>
+              <div className="pipeline-connector">
+                <ArrowRight size={16} />
+              </div>
+              <div className="pipeline-step">
+                <div className="pipeline-icon">
+                  <Database size={22} />
+                </div>
+                <div className="pipeline-label">Multi-Source Search</div>
+                <div className="pipeline-desc">5 providers in parallel</div>
+              </div>
+              <div className="pipeline-connector">
+                <ArrowRight size={16} />
+              </div>
+              <div className="pipeline-step">
+                <div className="pipeline-icon">
+                  <Brain size={22} />
+                </div>
+                <div className="pipeline-label">AI Synthesis</div>
+                <div className="pipeline-desc">3-tier LLM hierarchy</div>
+              </div>
+              <div className="pipeline-connector">
+                <ArrowRight size={16} />
+              </div>
+              <div className="pipeline-step">
+                <div className="pipeline-icon">
+                  <Shield size={22} />
+                </div>
+                <div className="pipeline-label">Fact Check</div>
+                <div className="pipeline-desc">Cross-reference claims</div>
+              </div>
+              <div className="pipeline-connector">
+                <ArrowRight size={16} />
+              </div>
+              <div className="pipeline-step">
+                <div className="pipeline-icon">
+                  <FileCheck size={22} />
+                </div>
+                <div className="pipeline-label">Final Report</div>
+                <div className="pipeline-desc">PDF, Markdown, JSON</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Stats Bar */}
+        {!reportContent && !loading && progressSteps.length === 0 && (
+          <div className="stats-bar">
+            <div className="stat-item">
+              <div className="stat-number">5</div>
+              <div className="stat-label">Search Providers</div>
+            </div>
+            <div className="stat-divider"></div>
+            <div className="stat-item">
+              <div className="stat-number">3</div>
+              <div className="stat-label">LLM Tiers</div>
+            </div>
+            <div className="stat-divider"></div>
+            <div className="stat-item">
+              <div className="stat-number">3x</div>
+              <div className="stat-label">Reflection Loops</div>
+            </div>
+            <div className="stat-divider"></div>
+            <div className="stat-item">
+              <div className="stat-number">∞</div>
+              <div className="stat-label">Follow-up Q&A</div>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="error-banner">
+            <span>❌</span> {error}
+          </div>
+        )}
+
+        {/* Progress Timeline */}
+        {progressSteps.length > 0 && (
+          <div className="progress-timeline">
+            <h3 className="timeline-title">Research Progress</h3>
+            <div className="timeline-steps">
+              {progressSteps.map((step) => (
                 <div
-                  className={`meta-chip ${avgConfidence >= 70 ? "meta-high" : "meta-low"}`}
+                  key={step.id}
+                  className={`timeline-step ${step.type === "error" ? "step-error" : ""}`}
                 >
-                  <Shield size={13} />
-                  <span>{avgConfidence}% avg confidence</span>
-                </div>
-              )}
-              {costEstimate > 0 && (
-                <div className="meta-chip">
-                  <DollarSign size={13} />
-                  <span>${costEstimate.toFixed(4)}</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Executive Summary Card */}
-          {executiveSummary && (
-            <div className="exec-summary-card">
-              <div className="exec-summary-header">
-                <BookOpen size={15} />
-                <span>Executive Summary</span>
-              </div>
-              <div className="exec-summary-body">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {executiveSummary}
-                </ReactMarkdown>
-              </div>
-            </div>
-          )}
-
-          {/* Format Tabs */}
-          <div className="format-tabs">
-            <button
-              className={`tab ${activeTab === "markdown" ? "tab-active" : ""}`}
-              onClick={() => setActiveTab("markdown")}
-            >
-              <FileText size={14} /> Rendered
-            </button>
-            <button
-              className={`tab ${activeTab === "pdf" ? "tab-active" : ""}`}
-              onClick={() => setActiveTab("pdf")}
-            >
-              <Download size={14} /> PDF
-            </button>
-            <button
-              className={`tab ${activeTab === "raw" ? "tab-active" : ""}`}
-              onClick={() => setActiveTab("raw")}
-            >
-              <FileJson size={14} /> JSON
-            </button>
-          </div>
-
-          {/* Tab Content */}
-          <div className="report-content">
-            {activeTab === "markdown" && (
-              <div className="markdown-body">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  rehypePlugins={[rehypeHighlight]}
-                  components={{
-                    a: ({ href, children }) => (
-                      <a href={href} target="_blank" rel="noopener noreferrer">
-                        {children}
-                      </a>
-                    ),
-                  }}
-                >
-                  {reportContent}
-                </ReactMarkdown>
-              </div>
-            )}
-            {activeTab === "pdf" && reportUrl && (
-              <div className="pdf-viewer">
-                <iframe src={reportUrl} title="Research Report"></iframe>
-              </div>
-            )}
-            {activeTab === "pdf" && !reportUrl && (
-              <div className="tab-placeholder">
-                PDF generation in progress or unavailable.
-              </div>
-            )}
-            {activeTab === "raw" && (
-              <pre className="raw-content">
-                {jsonReport
-                  ? JSON.stringify(jsonReport, null, 2)
-                  : reportContent}
-              </pre>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Follow-up Chat Panel */}
-      {chatOpen && (
-        <div className="chat-panel">
-          <div className="chat-header">
-            <h3>
-              <MessageCircle size={16} /> Ask about this report
-            </h3>
-            <button className="chat-close" onClick={() => setChatOpen(false)}>
-              <X size={16} />
-            </button>
-          </div>
-          <div className="chat-messages">
-            {chatMessages.length === 0 && (
-              <div className="chat-empty">
-                <Sparkles
-                  size={20}
-                  style={{ marginBottom: "0.5rem", opacity: 0.5 }}
-                />
-                <p>Ask any question about the generated report.</p>
-                <div className="suggestion-chips">
-                  {SUGGESTION_CHIPS.map((chip, i) => (
-                    <button
-                      key={i}
-                      className="suggestion-chip"
-                      onClick={() => handleSuggestionClick(chip)}
-                    >
-                      {chip}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {chatMessages.map((msg, i) => (
-              <div key={i} className={`chat-message ${msg.role}`}>
-                <div className="message-content">{msg.content}</div>
-                {msg.role === "assistant" &&
-                  msg.sources &&
-                  msg.sources.length > 0 && (
-                    <div className="chat-sources">
-                      <span className="sources-label">Sources cited:</span>
-                      {msg.sources.map((src, j) => (
-                        <div key={j} className="source-snippet">
-                          {src.length > 120 ? src.substring(0, 120) + "…" : src}
-                        </div>
-                      ))}
-                    </div>
+                  <span className="step-icon">{step.icon}</span>
+                  <span className="step-message">{step.message}</span>
+                  {step.data?.sections && (
+                    <span className="step-badge">
+                      {step.data.sections.length} sections
+                    </span>
                   )}
+                  {step.data?.confidence_score && (
+                    <span className="confidence-badge">
+                      {Math.round(step.data.confidence_score)}%
+                    </span>
+                  )}
+                  <span className="step-time">{step.timestamp}</span>
+                </div>
+              ))}
+              {loading && (
+                <div className="timeline-step step-active">
+                  <span className="step-icon">
+                    <Loader2 size={16} className="spinner-icon" />
+                  </span>
+                  <span className="step-message">Processing...</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Report Display */}
+        {reportContent && (
+          <div className="report-container">
+            <div className="report-header">
+              <h2>
+                <Search size={18} /> Research Report: {topic}
+              </h2>
+              <div className="report-actions">
+                {reportUrl && (
+                  <button
+                    className="action-btn"
+                    onClick={handleDownload}
+                    title="Download PDF"
+                  >
+                    <Download size={16} /> PDF
+                  </button>
+                )}
+                {chatEnabled && (
+                  <button
+                    className="action-btn chat-btn"
+                    onClick={() => setChatOpen(!chatOpen)}
+                    title="Ask questions about this report"
+                  >
+                    <MessageCircle size={16} /> Chat
+                  </button>
+                )}
               </div>
-            ))}
-            {chatLoading && (
-              <div className="chat-message assistant">
-                <div className="message-content">
-                  <Loader2 size={14} className="spinner-icon" /> Thinking...
+            </div>
+
+            {/* Report Metadata Bar */}
+            {(runtimeSeconds > 0 ||
+              sourceCount > 0 ||
+              avgConfidence !== null) && (
+              <div className="report-meta-bar">
+                {runtimeSeconds > 0 && (
+                  <div className="meta-chip">
+                    <Clock size={13} />
+                    <span>{runtimeSeconds.toFixed(1)}s</span>
+                  </div>
+                )}
+                {sourceCount > 0 && (
+                  <div className="meta-chip">
+                    <Database size={13} />
+                    <span>{sourceCount} sources</span>
+                  </div>
+                )}
+                {avgConfidence !== null && (
+                  <div
+                    className={`meta-chip ${avgConfidence >= 70 ? "meta-high" : "meta-low"}`}
+                  >
+                    <Shield size={13} />
+                    <span>{avgConfidence}% avg confidence</span>
+                  </div>
+                )}
+                {costEstimate > 0 && (
+                  <div className="meta-chip">
+                    <DollarSign size={13} />
+                    <span>${costEstimate.toFixed(4)}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Executive Summary Card */}
+            {executiveSummary && (
+              <div className="exec-summary-card">
+                <div className="exec-summary-header">
+                  <BookOpen size={15} />
+                  <span>Executive Summary</span>
+                </div>
+                <div className="exec-summary-body">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {executiveSummary}
+                  </ReactMarkdown>
                 </div>
               </div>
             )}
-            <div ref={chatEndRef} />
+
+            {/* Format Tabs */}
+            <div className="format-tabs">
+              <button
+                className={`tab ${activeTab === "markdown" ? "tab-active" : ""}`}
+                onClick={() => setActiveTab("markdown")}
+              >
+                <FileText size={14} /> Rendered
+              </button>
+              <button
+                className={`tab ${activeTab === "pdf" ? "tab-active" : ""}`}
+                onClick={() => setActiveTab("pdf")}
+              >
+                <Download size={14} /> PDF
+              </button>
+              <button
+                className={`tab ${activeTab === "raw" ? "tab-active" : ""}`}
+                onClick={() => setActiveTab("raw")}
+              >
+                <FileJson size={14} /> JSON
+              </button>
+            </div>
+
+            {/* Tab Content */}
+            <div className="report-content">
+              {activeTab === "markdown" && (
+                <div className="markdown-body">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeHighlight]}
+                    components={{
+                      a: ({ href, children }) => (
+                        <a
+                          href={href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {children}
+                        </a>
+                      ),
+                    }}
+                  >
+                    {reportContent}
+                  </ReactMarkdown>
+                </div>
+              )}
+              {activeTab === "pdf" && reportUrl && (
+                <div className="pdf-viewer">
+                  <iframe src={reportUrl} title="Research Report"></iframe>
+                </div>
+              )}
+              {activeTab === "pdf" && !reportUrl && (
+                <div className="tab-placeholder">
+                  PDF generation in progress or unavailable.
+                </div>
+              )}
+              {activeTab === "raw" && (
+                <pre className="raw-content">
+                  {jsonReport
+                    ? JSON.stringify(jsonReport, null, 2)
+                    : reportContent}
+                </pre>
+              )}
+            </div>
           </div>
-          <div className="chat-input-area">
-            <input
-              type="text"
-              placeholder="Ask a follow-up question..."
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleChat()}
-            />
-            <button
-              onClick={handleChat}
-              disabled={chatLoading || !chatInput.trim()}
-            >
-              <Send size={16} />
-            </button>
+        )}
+
+        {/* Follow-up Chat Panel */}
+        {chatOpen && (
+          <div className="chat-panel">
+            <div className="chat-header">
+              <h3>
+                <MessageCircle size={16} /> Ask about this report
+              </h3>
+              <button className="chat-close" onClick={() => setChatOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="chat-messages">
+              {chatMessages.length === 0 && (
+                <div className="chat-empty">
+                  <Sparkles
+                    size={20}
+                    style={{ marginBottom: "0.5rem", opacity: 0.5 }}
+                  />
+                  <p>Ask any question about the generated report.</p>
+                  <div className="suggestion-chips">
+                    {SUGGESTION_CHIPS.map((chip, i) => (
+                      <button
+                        key={i}
+                        className="suggestion-chip"
+                        onClick={() => handleSuggestionClick(chip)}
+                      >
+                        {chip}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {chatMessages.map((msg, i) => (
+                <div key={i} className={`chat-message ${msg.role}`}>
+                  <div className="message-content">{msg.content}</div>
+                  {msg.role === "assistant" &&
+                    msg.sources &&
+                    msg.sources.length > 0 && (
+                      <div className="chat-sources">
+                        <span className="sources-label">Sources cited:</span>
+                        {msg.sources.map((src, j) => (
+                          <div key={j} className="source-snippet">
+                            {src.length > 120
+                              ? src.substring(0, 120) + "…"
+                              : src}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                </div>
+              ))}
+              {chatLoading && (
+                <div className="chat-message assistant">
+                  <div className="message-content">
+                    <Loader2 size={14} className="spinner-icon" /> Thinking...
+                  </div>
+                </div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
+            <div className="chat-input-area">
+              <input
+                type="text"
+                placeholder="Ask a follow-up question..."
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleChat()}
+              />
+              <button
+                onClick={handleChat}
+                disabled={chatLoading || !chatInput.trim()}
+              >
+                <Send size={16} />
+              </button>
+            </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+
+        {/* Footer */}
+        <footer className="footer">
+          <div className="footer-brand">Deep Research Agent</div>
+          <div className="footer-tech">
+            Built with <span>LangGraph</span> · <span>FastAPI</span> ·{" "}
+            <span>React</span>
+          </div>
+          <div className="footer-version">
+            v2.0 — Multi-Source AI Research Pipeline
+          </div>
+        </footer>
+      </div>
+    </>
   );
 }
 
