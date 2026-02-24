@@ -47,6 +47,7 @@ class WikipediaSearchProvider:
     def _search_sync(self, wiki, query: str, num_results: int) -> List[Dict[str, Any]]:
         """Synchronous search logic run in thread pool."""
         import urllib.request
+        import urllib.parse
         import json
 
         results = []
@@ -55,7 +56,16 @@ class WikipediaSearchProvider:
         try:
             encoded_query = urllib.parse.quote(query)
             url = f"https://{self._language}.wikipedia.org/w/api.php?action=opensearch&search={encoded_query}&limit={num_results}&format=json"
-            with urllib.request.urlopen(url, timeout=10) as response:
+
+            # Must set User-Agent explicitly on the Request object — urlopen(url) sends
+            # "Python-urllib/3.x" which Wikipedia blocks with a 403.
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "DeepResearchAgent/2.0 (https://github.com/abhigupta/deep_research_agent)"
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode())
 
             if len(data) >= 4:

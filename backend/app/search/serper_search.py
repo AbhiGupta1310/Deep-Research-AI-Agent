@@ -4,6 +4,7 @@ Uses httpx for async HTTP calls.
 """
 
 import os
+from dotenv import load_dotenv, find_dotenv # Add this
 from typing import List, Dict, Any
 import httpx
 
@@ -15,7 +16,15 @@ class SerperSearchProvider:
     """Search provider using the Serper API for Google search results."""
 
     def __init__(self):
+        # Force search for .env in current or parent directories
+        load_dotenv(find_dotenv(), override=True) 
         self._api_key = os.getenv("SERPER_API_KEY")
+        
+        # Debugging: Print only the first 4 chars to confirm it's there
+        if self._api_key:
+            print(f"[SerperSearch] Key loaded: {self._api_key[:4]}****")
+        else:
+            print("[SerperSearch] CRITICAL: Key is still None after load_dotenv")
 
     async def search(self, query: str, num_results: int = 5) -> List[Dict[str, Any]]:
         """
