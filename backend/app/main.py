@@ -1,6 +1,7 @@
 import sys
 import os
 import logging
+import gc
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,13 @@ import asyncio
 import json
 import random
 import warnings
+
+# Memory optimization: enable garbage collection in production
+if os.getenv("RENDER") or os.getenv("PRODUCTION"):
+    gc.enable()
+    gc.set_debug(0)  # Disable debug mode to save memory
+    # Collect garbage every 100 object allocations
+    gc.set_threshold(700, 10, 10)
 
 # Aggressively suppress Pydantic V2 serialization warnings
 warnings.filterwarnings(
@@ -228,6 +236,8 @@ async def conduct_research(request: ResearchRequest):
             )
         finally:
             await sse_manager.close()
+            # Force garbage collection after large research task
+            gc.collect()
 
     # Start the graph execution in a background task
     # and yield SSE events as they come

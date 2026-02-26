@@ -8,9 +8,15 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.constants import Send
 
 from .state import (
-    ReportState, SectionState, Section, Sections,
-    Queries, SearchQuery, QueryAnalysisAndHyDE,
-    SearchRoute, SearchRoutes
+    ReportState,
+    SectionState,
+    Section,
+    Sections,
+    Queries,
+    SearchQuery,
+    QueryAnalysisAndHyDE,
+    SearchRoute,
+    SearchRoutes,
 )
 from .models import get_cheap_llm, get_mid_llm, get_premium_llm
 from .search import (
@@ -54,6 +60,7 @@ warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValu
 # Node: Query Analyzer + HyDE Generator — v2.0
 # ============================================================
 
+
 async def query_analyzer_hyde(state: ReportState):
     """
     First node in the pipeline. Analyzes query intent, generates a
@@ -64,32 +71,36 @@ async def query_analyzer_hyde(state: ReportState):
     """
 
     topic = state["topic"]
-    print('--- Query Analyzer + HyDE Generation ---')
+    print("--- Query Analyzer + HyDE Generation ---")
 
     # Step 1: Check semantic cache
     try:
         cached = await _semantic_cache.check_cache(topic)
         if cached:
-            print('--- Cache HIT — returning cached report ---')
+            print("--- Cache HIT — returning cached report ---")
             return {
                 "cache_hit": True,
                 "final_report": cached.get("content", ""),
             }
     except Exception as e:
-        print(f'[Cache] Error checking cache: {e}')
-    
+        print(f"[Cache] Error checking cache: {e}")
+
     # Step 2: Fused Query Analysis and HyDE Generation
     structured_llm = get_mid_llm().with_structured_output(QueryAnalysisAndHyDE)
     prompt = QUERY_ANALYZER_AND_HYDE_PROMPT.format(topic=topic)
-    
+
     try:
-        result = structured_llm.invoke([
-            SystemMessage(content=prompt),
-            HumanMessage(content="Analyze this research topic and generate the HyDE document.")
-        ])
+        result = structured_llm.invoke(
+            [
+                SystemMessage(content=prompt),
+                HumanMessage(
+                    content="Analyze this research topic and generate the HyDE document."
+                ),
+            ]
+        )
         domain = result.domain
         hyde_document = result.hyde_document
-        print(f'--- Fused Analysis & HyDE Complete ({len(hyde_document)} chars) ---')
+        print(f"--- Fused Analysis & HyDE Complete ({len(hyde_document)} chars) ---")
     except Exception as e:
         print(f"[Query Analyzer] Failed structured output: {e}")
         domain = ""
@@ -106,6 +117,7 @@ async def query_analyzer_hyde(state: ReportState):
 # Conditional Edge: Route After HyDE (cache check)
 # ============================================================
 
+
 def route_after_hyde(state: ReportState) -> str:
     """
     Route based on cache hit:
@@ -121,12 +133,13 @@ def route_after_hyde(state: ReportState) -> str:
 # Node: Generate Report Plan
 # ============================================================
 
+
 async def generate_report_plan(state: ReportState):
     """Generate the overall plan for building the report."""
 
     topic = state["topic"]
     depth = state.get("metadata", {}).get("depth", "deep")
-    print(f'--- Generating Report Plan (Depth: {depth}) ---')
+    print(f"--- Generating Report Plan (Depth: {depth}) ---")
 
     report_structure = DEFAULT_REPORT_STRUCTURE
     number_of_queries = 3
@@ -136,15 +149,19 @@ async def generate_report_plan(state: ReportState):
     system_instructions_query = REPORT_PLAN_QUERY_GENERATOR_PROMPT.format(
         topic=topic,
         report_organization=report_structure,
-        number_of_queries=number_of_queries
+        number_of_queries=number_of_queries,
     )
 
     try:
         # Generate queries
-        results = structured_llm.invoke([
-            SystemMessage(content=system_instructions_query),
-            HumanMessage(content='Generate search queries that will help with planning the sections of the report.')
-        ])
+        results = structured_llm.invoke(
+            [
+                SystemMessage(content=system_instructions_query),
+                HumanMessage(
+                    content="Generate search queries that will help with planning the sections of the report."
+                ),
+            ]
+        )
 
         # Convert SearchQuery objects to strings
         query_list = [
@@ -154,38 +171,51 @@ async def generate_report_plan(state: ReportState):
 
         # Multi-source search for planning context
         all_results = []
-        for query in query_list[:4]:  # Limit to 4 queries for planning
+        for query in query_list[:3]:  # Limit to 3 queries (not 4) for planning
             provider_tasks = [
-                _tavily.search(query, num_results=3),
-                _serper.search(query, num_results=3),
+                _tavily.search(query, num_results=2),  # Reduced from 3
+                _serper.search(query, num_results=2),  # Reduced from 3
             ]
             results = await asyncio.gather(*provider_tasks, return_exceptions=True)
             for result in results:
                 if isinstance(result, list):
                     all_results.extend(result)
 
+            # Cap results to prevent memory bloat
+            if len(all_results) > 20:
+                all_results = all_results[:20]
+                break
+
         if not all_results:
             print("Warning: No search results returned")
             search_context = "No search results available."
         else:
-            ranked = await _merger.merge_and_rank(all_results, top_k=10)
-            search_context = format_ranked_results(ranked, max_tokens=8000)
+            ranked = await _merger.merge_and_rank(
+                all_results, top_k=8
+            )  # Reduced from 10
+            search_context = format_ranked_results(
+                ranked, max_tokens=6000
+            )  # Reduced from 8000
 
         # Generate sections
         system_instructions_sections = REPORT_PLAN_SECTION_GENERATOR_PROMPT.format(
             topic=topic,
             report_organization=report_structure,
             search_context=search_context,
-            depth=depth
+            depth=depth,
         )
 
         structured_llm = get_cheap_llm().with_structured_output(Sections)
-        report_sections = structured_llm.invoke([
-            SystemMessage(content=system_instructions_sections),
-            HumanMessage(content="Generate the sections of the report. Your response must include a 'sections' field containing a list of sections. Each section must have: name, description, plan, research, and content fields.")
-        ])
+        report_sections = structured_llm.invoke(
+            [
+                SystemMessage(content=system_instructions_sections),
+                HumanMessage(
+                    content="Generate the sections of the report. Your response must include a 'sections' field containing a list of sections. Each section must have: name, description, plan, research, and content fields."
+                ),
+            ]
+        )
 
-        print('--- Generating Report Plan Completed ---')
+        print("--- Generating Report Plan Completed ---")
         return {"sections": report_sections.sections}
 
     except Exception as e:
@@ -197,6 +227,7 @@ async def generate_report_plan(state: ReportState):
 # Node: Query Rewriter + Expander (per section) — v2.0
 # ============================================================
 
+
 async def query_rewriter_expander(state: SectionState):
     """
     Generate diverse search queries for a section using HyDE context.
@@ -206,10 +237,12 @@ async def query_rewriter_expander(state: SectionState):
 
     section = state["section"]
     # Get HyDE document from parent state if available, else use section description
-    hyde_context = state.get("hyde_document", section.description) or section.description
+    hyde_context = (
+        state.get("hyde_document", section.description) or section.description
+    )
     depth = state.get("depth", "deep")
 
-    print(f'--- Rewriting Queries for Section: {section.name} (Depth: {depth}) ---')
+    print(f"--- Rewriting Queries for Section: {section.name} (Depth: {depth}) ---")
 
     number_of_queries = 1 if depth == "quick" else 2
     structured_llm = get_cheap_llm().with_structured_output(Queries)
@@ -220,13 +253,19 @@ async def query_rewriter_expander(state: SectionState):
         number_of_queries=number_of_queries,
     )
 
-    user_instruction = "Generate diverse search queries from multiple angles for this section topic."
-    search_queries = await structured_llm.ainvoke([
-        SystemMessage(content=system_instructions),
-        HumanMessage(content=user_instruction)
-    ])
+    user_instruction = (
+        "Generate diverse search queries from multiple angles for this section topic."
+    )
+    search_queries = await structured_llm.ainvoke(
+        [
+            SystemMessage(content=system_instructions),
+            HumanMessage(content=user_instruction),
+        ]
+    )
 
-    print(f'--- Query Rewriting for Section: {section.name} Complete ({len(search_queries.queries)} queries) ---')
+    print(
+        f"--- Query Rewriting for Section: {section.name} Complete ({len(search_queries.queries)} queries) ---"
+    )
 
     return {"search_queries": search_queries.queries}
 
@@ -234,6 +273,7 @@ async def query_rewriter_expander(state: SectionState):
 # ============================================================
 # Node: Multi-Source Search (Adaptive Routing) — v2.0
 # ============================================================
+
 
 async def multi_source_search(state: SectionState):
     """
@@ -243,85 +283,112 @@ async def multi_source_search(state: SectionState):
 
     search_queries = state["search_queries"]
     query_strings = [
-        q.search_query if isinstance(q, SearchQuery) else str(q)
-        for q in search_queries
+        q.search_query if isinstance(q, SearchQuery) else str(q) for q in search_queries
     ]
     section_name = state["section"].name
 
-    print(f'--- Adaptive Multi-Source Search for "{section_name}" ({len(query_strings)} queries) ---')
+    print(
+        f'--- Adaptive Multi-Source Search for "{section_name}" ({len(query_strings)} queries) ---'
+    )
 
     domain = state.get("domain", "").lower()
     hyde_context = state.get("hyde_document", section_name)
     depth = state.get("depth", "deep")
-    
+
     # 1. Ask LLM to route the queries
     structured_llm = get_cheap_llm().with_structured_output(SearchRoutes)
-    
+
     prompt = SEARCH_ROUTER_PROMPT.format(
-        domain=domain,
-        hyde_context=hyde_context[:2000]
+        domain=domain, hyde_context=hyde_context[:2000]
     )
-    
+
     # Send the raw strings attached
     queries_text = "\n".join([f"- {q}" for q in query_strings])
     user_msg = f"Determine the best search providers for these queries:\n{queries_text}"
-    
+
     try:
-        route_results = structured_llm.invoke([
-            SystemMessage(content=prompt),
-            HumanMessage(content=user_msg)
-        ])
+        route_results = structured_llm.invoke(
+            [SystemMessage(content=prompt), HumanMessage(content=user_msg)]
+        )
         routes = route_results.routes
     except Exception as e:
-        print(f"[MultiSourceSearch] LLM Routing failed ({e}), falling back to default routing")
+        print(
+            f"[MultiSourceSearch] LLM Routing failed ({e}), falling back to default routing"
+        )
         # Fallback: Every query gets Tavily and Wikipedia
         routes = [
-            SearchRoute(query=q, use_tavily=True, use_wikipedia=True, use_arxiv=False, use_news=False)
+            SearchRoute(
+                query=q,
+                use_tavily=True,
+                use_wikipedia=True,
+                use_arxiv=False,
+                use_news=False,
+            )
             for q in query_strings
         ]
 
-    # 2. Execute the routed searches
+    # 2. Execute the routed searches with MEMORY LIMITS
     all_results = []
-    
+    MAX_RESULTS_PER_SECTION = (
+        30  # Cap total results per section to prevent memory bloat
+    )
+
     for route in routes:
+        # If we've already collected enough results, skip remaining queries
+        if len(all_results) >= MAX_RESULTS_PER_SECTION:
+            break
+
         provider_tasks = []
-        
-        tavily_results = 2 if depth == "quick" else 3
-        
+
+        # Reduce result counts for quick depth
+        tavily_results = 1 if depth == "quick" else 2
+
         if route.use_tavily:
-            provider_tasks.append(_tavily.search(route.query, num_results=tavily_results))
-            
+            provider_tasks.append(
+                _tavily.search(route.query, num_results=tavily_results)
+            )
+
         if route.use_wikipedia:
             provider_tasks.append(_wikipedia.search(route.query, num_results=1))
-            
+
         if route.use_news:
-            provider_tasks.append(_news.search(route.query, num_results=1 if depth == "quick" else 2))
-            
+            provider_tasks.append(_news.search(route.query, num_results=1))
+
         if route.use_arxiv:
             provider_tasks.append(_arxiv.search(route.query, num_results=1))
-            
+
         # Fallback if LLM predicted NO providers:
         if not provider_tasks:
-            provider_tasks.append(_tavily.search(route.query, num_results=2))
-            
+            provider_tasks.append(_tavily.search(route.query, num_results=1))
+
         results = await asyncio.gather(*provider_tasks, return_exceptions=True)
 
         for result in results:
             if isinstance(result, Exception):
-                print(f'[MultiSourceSearch] Provider error for query "{route.query}": {result}')
+                print(
+                    f'[MultiSourceSearch] Provider error for query "{route.query}": {result}'
+                )
                 continue
             if isinstance(result, list):
                 all_results.extend(result)
+                # Keep only the cap
+                if len(all_results) > MAX_RESULTS_PER_SECTION:
+                    all_results = all_results[:MAX_RESULTS_PER_SECTION]
 
-    print(f'--- Collected {len(all_results)} raw results for "{section_name}" ---')
+    print(
+        f'--- Collected {len(all_results)} raw results (capped) for "{section_name}" ---'
+    )
 
     # Store raw results in state — merging/ranking happens in result_merger_ranker
     raw_dicts = []
     for r in all_results:
-        if hasattr(r, 'to_dict'):
+        if hasattr(r, "to_dict"):
             raw_dicts.append(r.to_dict())
         elif isinstance(r, dict):
             raw_dicts.append(r)
+
+    # Clear raw results from memory
+    del all_results
 
     return {
         "search_results": raw_dicts,
@@ -332,6 +399,7 @@ async def multi_source_search(state: SectionState):
 # Node: Result Merger + Ranker (per section) — v2.0
 # ============================================================
 
+
 async def result_merger_ranker(state: SectionState):
     """
     Merge, deduplicate, and rank search results by credibility.
@@ -341,7 +409,9 @@ async def result_merger_ranker(state: SectionState):
     section_name = state["section"].name
     raw_results = state.get("search_results", [])
 
-    print(f'--- Result Merger & Ranker for "{section_name}" ({len(raw_results)} raw results) ---')
+    print(
+        f'--- Result Merger & Ranker for "{section_name}" ({len(raw_results)} raw results) ---'
+    )
 
     if not raw_results:
         print(f'--- No results to rank for "{section_name}" ---')
@@ -372,18 +442,19 @@ async def result_merger_ranker(state: SectionState):
 # Node: Write Section (per section)
 # ============================================================
 
+
 async def write_section(state: SectionState):
     """Write a section of the report using the mid-tier LLM."""
 
     section = state["section"]
     source_str = state["source_str"]
 
-    print(f'--- Writing Section: {section.name} ---')
+    print(f"--- Writing Section: {section.name} ---")
 
     system_instructions = SECTION_WRITER_PROMPT.format(
         section_title=section.name,
         section_topic=section.description,
-        context=source_str
+        context=source_str,
     )
 
     writer_llm = get_mid_llm().bind(
@@ -391,29 +462,26 @@ async def write_section(state: SectionState):
     )
 
     user_instruction = "Generate a report section based on the provided sources."
-    section_content = await writer_llm.ainvoke([
-        SystemMessage(content=system_instructions),
-        HumanMessage(content=user_instruction)
-    ])
+    section_content = await writer_llm.ainvoke(
+        [
+            SystemMessage(content=system_instructions),
+            HumanMessage(content=user_instruction),
+        ]
+    )
 
     section.content = section_content.content
 
-    print(f'--- Writing Section: {section.name} Completed ---')
+    print(f"--- Writing Section: {section.name} Completed ---")
 
     sources = state.get("search_results", [])
-    
-    return {
-        "completed_sections": [section],
-        "sources": sources
-    }
 
-
-
+    return {"completed_sections": [section], "sources": sources}
 
 
 # ============================================================
 # Node: Parallelize Section Writing (fan-out)
 # ============================================================
+
 
 def parallelize_section_writing(state: ReportState):
     """Fan-out: kick off section builders in parallel for research sections."""
@@ -423,8 +491,10 @@ def parallelize_section_writing(state: ReportState):
     depth = state.get("metadata", {}).get("depth", "deep")
 
     return [
-        Send("section_builder_with_web_search",
-             {"section": s, "hyde_document": hyde_doc, "domain": domain, "depth": depth})
+        Send(
+            "section_builder_with_web_search",
+            {"section": s, "hyde_document": hyde_doc, "domain": domain, "depth": depth},
+        )
         for s in state["sections"]
         if s.research
     ]
@@ -433,6 +503,7 @@ def parallelize_section_writing(state: ReportState):
 # ============================================================
 # Utility: Format Sections
 # ============================================================
+
 
 def format_sections(sections: list[Section]) -> str:
     """Format a list of report sections into a single text string."""
@@ -458,6 +529,7 @@ Content:
 # Node: Aggregator + Deduplicator — v2.0
 # ============================================================
 
+
 def aggregator_deduplicator(state: ReportState):
     """
     Aggregate completed sections, deduplicate cross-section sources,
@@ -466,11 +538,11 @@ def aggregator_deduplicator(state: ReportState):
     Replaces the old format_completed_sections node.
     """
 
-    print('--- Aggregator + Deduplicator ---')
+    print("--- Aggregator + Deduplicator ---")
     completed_sections = state.get("completed_sections", [])
 
     if not completed_sections:
-        print('--- Aggregator: No sections to aggregate ---')
+        print("--- Aggregator: No sections to aggregate ---")
         return {"report_sections_from_research": ""}
 
     # Format sections as context for the synthesis writer
@@ -488,8 +560,10 @@ def aggregator_deduplicator(state: ReportState):
         elif not url:
             deduped_sources.append(src)
 
-    print(f'--- Aggregator Complete: {len(completed_sections)} sections, '
-          f'{len(deduped_sources)} unique sources (from {len(all_sources)} total) ---')
+    print(
+        f"--- Aggregator Complete: {len(completed_sections)} sections, "
+        f"{len(deduped_sources)} unique sources (from {len(all_sources)} total) ---"
+    )
 
     return {
         "report_sections_from_research": completed_report_sections,
@@ -497,12 +571,10 @@ def aggregator_deduplicator(state: ReportState):
     }
 
 
-
-
-
 # ============================================================
 # Node: Final Synthesis Writer — v2.0 (Premium LLM)
 # ============================================================
+
 
 async def final_synthesis_writer(state: ReportState):
     """
@@ -515,7 +587,9 @@ async def final_synthesis_writer(state: ReportState):
     """
 
     sections = state["sections"]
-    completed_sections = {s.name: s.content for s in state.get("completed_sections", [])}
+    completed_sections = {
+        s.name: s.content for s in state.get("completed_sections", [])
+    }
     report_content = state.get("report_sections_from_research", "")
 
     print("--- Final Synthesis Writer (Premium LLM) ---")
@@ -541,14 +615,16 @@ async def final_synthesis_writer(state: ReportState):
     system_instructions = FINAL_SYNTHESIS_PROMPT.format(
         topic=topic,
         research_sections=all_research_content[:80000],
-        non_research_section_names=", ".join(non_research_names)
+        non_research_section_names=", ".join(non_research_names),
     )
 
     try:
-        response = await get_premium_llm().ainvoke([
-            SystemMessage(content=system_instructions),
-            HumanMessage(content="Synthesize the complete final report.")
-        ])
+        response = await get_premium_llm().ainvoke(
+            [
+                SystemMessage(content=system_instructions),
+                HumanMessage(content="Synthesize the complete final report."),
+            ]
+        )
 
         final_report = response.content
 
@@ -569,4 +645,3 @@ async def final_synthesis_writer(state: ReportState):
             completed_sections.get(s.name, s.content or "") for s in sections
         )
         return {"final_report": all_sections}
-

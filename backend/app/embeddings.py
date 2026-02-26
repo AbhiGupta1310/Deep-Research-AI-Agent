@@ -62,7 +62,8 @@ async def embed_text(text: str) -> Optional[List[float]]:
 
 async def embed_texts(texts: List[str]) -> List[Optional[List[float]]]:
     """
-    Embed multiple texts in a single batch API call.
+    Embed multiple texts in batches to avoid memory spikes.
+    Uses smaller batches (max 20 texts per API call) to prevent OOM.
     """
     if not texts:
         return []
@@ -73,23 +74,36 @@ async def embed_texts(texts: List[str]) -> List[Optional[List[float]]]:
 
     model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 
-    # Truncate all texts to avoid token limits per item
-    # Provide a fallback empty string if a text chunk is None
-    truncated_texts = [text[:8000] if text else "" for text in texts]
-
+    # Process in smaller batches to prevent memory spikes
+    # Max 20 texts per batch for embedding-3-small
+    MAX_BATCH_SIZE = 20
+    all_embeddings = [None] * len(texts)
+    
     try:
-        # Pass the entire list to the input parameter for ONE single HTTP request
-        response = await asyncio.to_thread(
-            lambda: client.embeddings.create(
-                input=truncated_texts,
-                model=model,
+        for batch_start in range(0, len(texts), MAX_BATCH_SIZE):
+            batch_end = min(batch_start + MAX_BATCH_SIZE, len(texts))
+            batch_texts = texts[batch_start:batch_end]
+            
+            # Truncate texts to avoid token limits
+            truncated_batch = [text[:8000] if text else "" for text in batch_texts]
+            
+            # Embed this batch
+            response = await asyncio.to_thread(
+                lambda tb=truncated_batch: client.embeddings.create(
+                    input=tb,
+                    model=model,
+                )
             )
-        )
+            
+            # Store embeddings in correct positions
+            sorted_data = sorted(response.data, key=lambda x: x.index)
+            for i, item in enumerate(sorted_data):
+                all_embeddings[batch_start + i] = item.embedding
+            
+            # Clear the response from memory immediately
+            del response
         
-        # The API returns them in the exact order they were sent
-        # We sort by 'index' just to be absolutely safe
-        sorted_data = sorted(response.data, key=lambda x: x.index)
-        return [item.embedding for item in sorted_data]
+        return all_embeddings
 
     except Exception as e:
         print(f"[Embeddings] Error batch embedding texts: {e}")

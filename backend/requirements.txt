@@ -1,40 +1,40 @@
 # Core LLM & Orchestration
-langchain
-langchain-openai
-langchain-community
-langgraph
-pydantic
-python-dotenv
-tiktoken
+langchain>=0.1.0
+langchain-openai>=0.0.5
+langchain-community>=0.0.10
+langgraph>=0.0.10
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+tiktoken>=0.5.0
 
-# API Server
-fastapi
-uvicorn
-sse-starlette
-httpx
+# API Server (optimized)
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+sse-starlette>=1.6.0
+httpx>=0.25.0
 
-# Search Providers
-tavily-python
-arxiv
-wikipedia-api
-newsapi-python
+# Search Providers (lean versions)
+tavily-python>=0.3.0
+arxiv>=2.1.0
+wikipedia-api>=0.6.0
+newsapi-python>=0.2.7
 
-# Cache & Vector Store
-redis[hiredis]
-chromadb
+# Cache & Vector Store (memory-optimized)
+redis[hiredis]>=5.0.0
 
 # Embeddings
-openai
-numpy
+openai>=1.0.0
+numpy>=1.24.0
 
-# Output & Formatting
-weasyprint
-markdown
-rich
+# Output & Formatting (lightweight)
+markdown>=3.5.0
 
 # Observability
-langsmith
+langsmith>=0.1.0
 
 # Testing
-pytest
-pytest-asyncio
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+
+# Performance optimization
+uvloop>=0.17.0
