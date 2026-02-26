@@ -308,8 +308,6 @@ function App() {
         return <FileText size={16} />;
       case "section_complete":
         return <Check size={16} />;
-      case "reflection_loop":
-        return <RefreshCw size={16} />;
       case "fact_checking":
         return <Shield size={16} />;
       case "fact_check_complete":
@@ -501,8 +499,8 @@ function App() {
             </div>
             <div className="stat-divider"></div>
             <div className="stat-item">
-              <div className="stat-number">3x</div>
-              <div className="stat-label">Reflection Loops</div>
+              <div className="stat-number">1</div>
+              <div className="stat-label">Pass Per Section</div>
             </div>
             <div className="stat-divider"></div>
             <div className="stat-item">

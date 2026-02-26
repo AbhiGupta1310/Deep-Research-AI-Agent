@@ -110,7 +110,7 @@ END
 
 ### Section Builder Subagent (per section)
 
-Each section runs through an internal reflection loop:
+Each section is built in a single pass:
 
 ```
 START
@@ -128,14 +128,10 @@ result_merger_ranker
 write_section
   |
   v
-critic_agent
-  |
-  |--- [gaps found AND loop count < 3] ---> query_rewriter_expander
-  |
-  |--- [approved OR loop count == 3] ---> END
+END
 ```
 
-The critic agent can loop back to the query rewriter up to three times. Each loop rewrites the search queries based on identified knowledge gaps, searches again, merges new results, and re-drafts the section.
+No reflection loops at the section level. Query rewriting generates diverse angles (factual, conceptual, practical, comparative, recent) in a single pass, and the section is drafted once based on the best merged results. Fact-checking happens at the main graph level after all sections are complete.
 
 ---
 
@@ -213,11 +209,20 @@ deep_research_agent/
 
 The central entry point. Defines:
 
-- `POST /api/research` -- Accepts a `ResearchRequest` (topic, depth, output_format) and returns an SSE stream. Internally, it invokes `reporter_agent.astream()` and maps each LangGraph node completion to a typed SSE event. When the graph finishes, it emits a `REPORT_READY` event containing the Markdown content, PDF download URL, JSON report data, confidence scores, source count, runtime, and estimated cost.
+- `POST /api/research` -- Accepts a `ResearchRequest` (topic, depth, output_format) and returns an SSE stream. Internally, it invokes `reporter_agent.astream()` and maps each LangGraph node completion to a typed SSE event. When the graph finishes, it emits a `REPORT_READY` event containing the Markdown content, PDF download URL, JSON report data, suggestion chips, confidence scores, source count, runtime, and estimated cost.
 - `POST /api/chat/{report_id}` -- Accepts a follow-up question and returns an answer with cited source chunks using ChromaDB retrieval.
 - `GET /api/reports/{report_id}/pdf` -- Serves the generated PDF file.
 - `GET /api/reports/{report_id}/json` -- Returns the structured JSON report.
 - `GET /api/reports/{report_id}/markdown` -- Returns the raw Markdown content.
+
+**Dynamic Suggestion Chips Generation**: After the report is compiled, the `POST /api/research` endpoint generates up to 10 follow-up questions using the cheap LLM and a structured output schema (`RequestQuestions`). These questions are:
+
+1. Generated from the first 3000 characters of the report
+2. Cached in Redis under the research topic for reuse
+3. Randomly sampled (3 out of 10) to show in the chat panel
+4. Designed to be distinct, actionable, and under 10 words each
+
+If chip generation fails, the frontend falls back to static default suggestions.
 
 A semaphore limits concurrent research requests to prevent resource exhaustion.
 
@@ -225,9 +230,9 @@ A semaphore limits concurrent research requests to prevent resource exhaustion.
 
 Defines two compiled graphs:
 
-1. **`create_section_builder_subagent()`** -- A `StateGraph` over `SectionState` with five nodes: `query_rewriter_expander`, `multi_source_search`, `result_merger_ranker`, `write_section`, and `critic_agent`. A conditional edge from `critic_agent` either loops back (up to 3 times) or terminates.
+1. **`create_section_builder_subagent()`** -- A `StateGraph` over `SectionState` with four nodes: `query_rewriter_expander`, `multi_source_search`, `result_merger_ranker`, and `write_section`. Linear flow with no loops or branching — each section is drafted in a single pass.
 
-2. **`create_reporter_agent()`** -- The main `StateGraph` over `ReportState`. Seven nodes: `query_analyzer_hyde`, `generate_report_plan`, the compiled section builder subagent, `aggregator_deduplicator`, `fact_checker`, `final_synthesis_writer`, and `output_compiler`. Uses `Send()` for parallel fan-out of the section builder across all research sections.
+2. **`create_reporter_agent()`** -- The main `StateGraph` over `ReportState`. Six nodes: `query_analyzer_hyde`, `generate_report_plan`, the compiled section builder subagent, `aggregator_deduplicator`, `fact_checker`, `final_synthesis_writer`, and `output_compiler`. Uses `Send()` for parallel fan-out of the section builder across all research sections (one pass per section). Fact-checking happens at the main graph level after all sections complete.
 
 ### `nodes.py` -- Node Functions
 
@@ -235,15 +240,13 @@ Contains all the graph node implementations:
 
 - **`query_analyzer_hyde`** -- Analyzes the user query, checks the Redis semantic cache, and generates a HyDE (Hypothetical Document Embedding) anchor document. If a cache hit is found (cosine similarity > 0.92), the pipeline short-circuits directly to the output compiler.
 - **`generate_report_plan`** -- Uses the cheap LLM to generate search queries for planning, runs them through Tavily and Serper, then generates a structured list of report sections with names, descriptions, and research flags.
-- **`query_rewriter_expander`** -- Generates diverse search queries for a given section using the HyDE document as context. Produces queries across multiple angles: factual, conceptual, practical, comparative, and recent.
+- **`query_rewriter_expander`** -- Generates diverse search queries for a given section using the HyDE document as context. Produces queries across multiple angles: factual, conceptual, practical, comparative, and recent (single pass, no loops).
 - **`multi_source_search`** -- Fans out each query to all five search providers in parallel using `asyncio.gather`. Collects raw results without ranking.
 - **`result_merger_ranker`** -- Takes raw search results and runs them through the `ResultMerger` for deduplication and credibility-based ranking. Returns the top-k results formatted as source context for the writer.
-- **`write_section`** -- Uses the mid-tier LLM (Claude Haiku) to draft a section based on the ranked source context. Enforces a 150-200 word limit per section.
-- **`critic_agent`** -- Uses the cheap LLM (Gemini Flash) to evaluate the draft on knowledge gaps, unsupported claims, outdated data, and source contradictions. Returns a confidence score and whether gaps were found.
-- **`should_reflect`** -- Conditional edge function. Routes back to `query_rewriter_expander` if gaps are found and the loop count is under 3, otherwise approves the section.
-- **`parallelize_section_writing`** -- Fan-out function that creates a `Send()` message for each research section, enabling parallel execution of the section builder subagent.
-- **`aggregator_deduplicator`** -- Replaces the old `format_completed_sections`. Aggregates all completed sections, deduplicates cross-section sources by URL, and formats the combined content for the synthesis writer.
-- **`fact_checker`** -- Cross-references claims across all completed sections. Flags claims with single-source support, identifies contradictions, and produces per-section confidence scores.
+- **`write_section`** -- Uses the mid-tier LLM (Claude Haiku) to draft a section based on the ranked source context. Enforces a 150-200 word limit per section. No internal iteration — one draft per section.
+- **`parallelize_section_writing`** -- Fan-out function that creates a `Send()` message for each research section, enabling parallel execution of the section builder subagent across all sections.
+- **`aggregator_deduplicator`** -- Aggregates all completed sections, deduplicates cross-section sources by URL, and formats the combined content for the synthesis writer.
+- **`fact_checker`** -- (Main graph level) Cross-references claims across all completed sections. Flags claims with single-source support, identifies contradictions, and produces per-section confidence scores.
 - **`final_synthesis_writer`** -- The single premium LLM call (Claude Sonnet). Receives all research sections, confidence scores, and fact-check flags. Writes the executive summary, introduction, conclusion, and smooths transitions between sections to produce a cohesive final report.
 
 ### `state.py` -- State Schemas
@@ -253,10 +256,9 @@ Defines the data structures that flow through the graph:
 - `Section` -- A Pydantic model for a single report section (name, description, research flag, content, key questions, search angle, priority).
 - `Sections` -- Wrapper for structured LLM output containing a list of sections.
 - `SearchQuery` / `Queries` -- Pydantic models for structured search query generation.
-- `CriticFeedback` -- Structured output from the critic agent (gaps_found, confidence_score, knowledge_gaps, unsupported_claims, suggested_queries).
-- `SectionState` -- TypedDict for the section builder subagent (section, search_queries, source_str, search_results, reflection_count, hyde_document, critic_feedback, etc.).
+- `SectionState` -- TypedDict for the section builder subagent (section, search_queries, source_str, search_results, hyde_document, etc.).
 - `SectionOutputState` -- TypedDict defining what the section builder returns to the parent graph.
-- `ReportState` -- TypedDict for the main reporter agent. Uses `Annotated[list, operator.add]` for merge-friendly fields like `completed_sections`.
+- `ReportState` -- TypedDict for the main reporter agent. Uses `Annotated[list, operator.add]` for merge-friendly fields like `completed_sections` and `sources`.
 - `ReportStateInput` / `ReportStateOutput` -- Input and output schemas for the top-level graph.
 
 ### `prompts.py` -- Prompt Templates
@@ -271,7 +273,6 @@ Contains all system prompts used throughout the pipeline:
 | `REPORT_SECTION_QUERY_GENERATOR_PROMPT` | `query_rewriter_expander` | Generates per-section queries with HyDE context              |
 | `SECTION_WRITER_PROMPT`                 | `write_section`           | Guides section drafting with strict formatting rules         |
 | `FINAL_SECTION_WRITER_PROMPT`           | (legacy)                  | Template for intro/conclusion writing                        |
-| `CRITIC_AGENT_PROMPT`                   | `critic_agent`            | Evaluates sections for gaps and issues                       |
 | `QUERY_ANALYZER_PROMPT`                 | `query_analyzer_hyde`     | Analyzes user query intent and scope                         |
 | `HYDE_GENERATOR_PROMPT`                 | `query_analyzer_hyde`     | Generates the hypothetical ideal answer                      |
 | `FACT_CHECKER_PROMPT`                   | `fact_checker`            | Cross-references claims and flags issues                     |
@@ -329,7 +330,7 @@ The frontend is a single-page React application built with Vite. It provides:
 ### Search Interface
 
 - A text input for the research topic.
-- A depth selector (Quick / Deep) that controls the number of search queries and reflection loops.
+- A depth selector (Quick / Deep) that controls the number of search queries per section.
 - An output format preference (PDF + MD / PDF Only / Markdown Only).
 
 ### Real-Time Progress
@@ -349,7 +350,14 @@ After report completion, displays:
 
 ### Follow-up Chat Panel
 
-A slide-out chat panel for asking questions about the generated report. Messages are sent to `POST /api/chat/{report_id}`, which retrieves relevant chunks from ChromaDB and answers using Claude Haiku. Assistant responses include cited source snippets. The empty state shows suggestion chips for common follow-up questions.
+A slide-out chat panel for asking questions about the generated report. Messages are sent to `POST /api/chat/{report_id}`, which retrieves relevant chunks from ChromaDB and answers using Claude Haiku. Assistant responses include cited source snippets.
+
+**Suggestion Chips Display**: When the chat panel first opens and no messages have been sent, it displays an empty state with:
+
+- A welcoming message: "Ask about the contents of this report."
+- **3 Dynamic Suggestion Chips** -- These are randomly selected from a set of 10 pre-generated questions that were intelligently created by the cheap LLM based on the report content. Each chip is a short, distinct follow-up question under 10 words. Users can click a chip to instantly populate the chat input with that question.
+
+This feature is powered by the smart caching strategy described in the [Smart Suggestion Chips](#smart-suggestion-chips) section, ensuring zero latency when opening the chat panel even on the first load.
 
 ### Key Frontend Dependencies
 
@@ -437,7 +445,14 @@ After a report is generated, the `FollowupChatHandler` in `chat/followup.py`:
 
 ### Smart Suggestion Chips
 
-When the chat panel is opened, the UI displays 3 dynamic suggestion chips. These chips are created by a cheap LLM analyzing the generated report. To optimize token usage and latency, the system caches the generated suggestion chips in the Redis Semantic Cache under the original research topic. Subsequent load of the same topic grabs these chips instantly without an LLM call.
+When a research report is generated, the system automatically creates **dynamic suggestion chips** — follow-up questions tailored to the content of the report. These chips are:
+
+1. **Generated Intelligently** -- The cheap LLM (Gemini Flash) analyzes the first 3000 characters of the report and generates exactly 10 insightful, distinct follow-up questions that can be answered directly from the report content.
+2. **Cached for Reuse** -- All 10 generated questions are cached in Redis under the original research topic. If the same topic is researched again, the system retrieves the cached questions instantly without re-generating them.
+3. **Randomly Sampled** -- When the chat panel opens, exactly 3 random questions are selected from the cached 10 and displayed as suggestion chips in the UI.
+4. **Optimized for UX** -- Each chip is kept under 10 words and designed to be distinct and actionable, encouraging users to explore different aspects of the report.
+
+This two-tier caching strategy (full set cached, random subset shown) balances **token efficiency** (no redundant LLM calls), **latency** (instant chip display), and **user experience** (fresh question variety on each chat open).
 
 ---
 
@@ -620,19 +635,71 @@ The frontend will be available at `http://localhost:5173` and the backend API at
 - `depth`: `"quick"` or `"deep"` (controls query count and search intensity)
 - `output_format`: `"pdf"`, `"markdown"`, or `"both"`
 
+### Chat Request Body
+
+```json
+{
+  "question": "What are the key advantages of vector databases?"
+}
+```
+
+Returns a JSON response with:
+
+```json
+{
+  "answer": "Vector databases provide several key advantages...",
+  "sources": ["source snippet 1", "source snippet 2"]
+}
+```
+
+### SSE Report Ready Event
+
+When the research completes, the final `report_ready` event includes comprehensive data:
+
+```json
+{
+  "type": "report_ready",
+  "message": "Report ready!",
+  "data": {
+    "report_id": "unique-report-id",
+    "content": "Full report markdown content...",
+    "markdown_content": "Same as content",
+    "markdown_url": "/api/reports/{report_id}/markdown",
+    "pdf_filename": "Research_Topic.pdf",
+    "pdf_url": "/api/reports/{report_id}/pdf",
+    "json_url": "/api/reports/{report_id}/json",
+    "json_report": { "sections": [...], "sources": [...] },
+    "chat_enabled": true,
+    "suggestion_chips": ["Question 1?", "Question 2?", "Question 3?"],
+    "source_count": 42,
+    "runtime_seconds": 185.5,
+    "cost_estimate_usd": 0.0234,
+    "confidence_scores": { "Section 1": 0.85, "Section 2": 0.92 }
+  }
+}
+```
+
+Key fields:
+
+- `suggestion_chips` -- Array of 3 randomly selected follow-up questions for the chat panel.
+- `chat_enabled` -- Boolean indicating whether ChromaDB embedding succeeded for RAG.
+- `cost_estimate_usd` -- Estimated LLM cost based on section count.
+- `runtime_seconds` -- Total end-to-end execution time.
+- `confidence_scores` -- Per-section confidence ratings from the fact-checker.
+
 ### SSE Event Types
 
-| Event Type            | Emitted By               | Description                                |
-| --------------------- | ------------------------ | ------------------------------------------ |
-| `query_analyzing`     | `query_analyzer_hyde`    | Query analysis started                     |
-| `plan_generated`      | `generate_report_plan`   | Report plan with section list              |
-| `section_researching` | Section builder nodes    | Search, merge, write, critique in progress |
-| `section_complete`    | `section_builder`        | A section finished all reflection loops    |
-| `fact_checking`       | `fact_checker`           | Cross-referencing claims                   |
-| `synthesis_writing`   | `final_synthesis_writer` | Premium LLM synthesizing final report      |
-| `compiling_output`    | `output_compiler`        | Generating PDF, MD, JSON                   |
-| `report_ready`        | (final event)            | Complete report with all data              |
-| `error`               | (any node)               | Error occurred during processing           |
+| Event Type            | Emitted By               | Description                               |
+| --------------------- | ------------------------ | ----------------------------------------- |
+| `query_analyzing`     | `query_analyzer_hyde`    | Query analysis started                    |
+| `plan_generated`      | `generate_report_plan`   | Report plan with section list             |
+| `section_researching` | Section builder nodes    | Search, merge, write in progress          |
+| `section_complete`    | `section_builder`        | A section finished (single pass)          |
+| `fact_checking`       | `fact_checker`           | Cross-referencing claims across sections  |
+| `synthesis_writing`   | `final_synthesis_writer` | Premium LLM synthesizing final report     |
+| `compiling_output`    | `output_compiler`        | Generating PDF, MD, JSON                  |
+| `report_ready`        | (final event)            | Complete report with all data (see above) |
+| `error`               | (any node)               | Error occurred during processing          |
 
 ---
 
