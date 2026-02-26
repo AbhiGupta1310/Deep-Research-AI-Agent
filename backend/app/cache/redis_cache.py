@@ -18,7 +18,7 @@ from ..embeddings import embed_text, cosine_similarity
 
 
 # Cache configuration
-CACHE_SIMILARITY_THRESHOLD = 0.92
+CACHE_SIMILARITY_THRESHOLD = 0.90
 CACHE_TTL_SECONDS = 86400  # 24 hours
 
 
@@ -41,7 +41,10 @@ class SemanticCache:
             if aioredis is None:
                 print("[SemanticCache] Redis package not installed. Cache disabled.")
                 return None
-            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+            redis_url = os.getenv("REDIS_URL")
+            if not redis_url:
+                print("[SemanticCache] REDIS_URL not set. Cache disabled.")
+                return None
             try:
                 self._redis = aioredis.from_url(redis_url, decode_responses=True)
                 await self._redis.ping()
@@ -145,5 +148,5 @@ class SemanticCache:
     async def close(self) -> None:
         """Close the Redis connection."""
         if self._redis is not None:
-            await self._redis.close()
+            await self._redis.aclose()
             self._redis = None

@@ -5,6 +5,7 @@ Verifies deduplication, scoring, ranking, and formatting logic.
 """
 
 import pytest
+from unittest.mock import patch, AsyncMock
 from app.search.merger import ResultMerger, SourceMetadata, format_ranked_results
 
 
@@ -41,28 +42,42 @@ class TestResultMerger:
     def setup_method(self):
         self.merger = ResultMerger()
 
-    def test_deduplication_by_url(self, sample_search_results):
+    @pytest.fixture(autouse=True)
+    def mock_embeddings(self):
+        with patch("app.search.merger.embed_text", new_callable=AsyncMock) as mock_embed_text, \
+             patch("app.search.merger.embed_texts", new_callable=AsyncMock) as mock_embed_texts:
+            mock_embed_text.return_value = [0.1] * 1536
+            # Always return a list of valid embeddings
+            mock_embed_texts.side_effect = lambda texts: [[0.1]*1536]*len(texts)
+            yield
+
+    @pytest.mark.asyncio
+    async def test_deduplication_by_url(self, sample_search_results):
         """Duplicate URLs should be removed."""
-        ranked = self.merger.merge_and_rank(sample_search_results, top_k=10)
+        ranked = await self.merger.merge_and_rank(sample_search_results, top_k=10)
         urls = [s.url for s in ranked]
         assert len(urls) == len(set(urls)), "Duplicate URLs found after merge_and_rank"
 
-    def test_dedup_reduces_count(self, sample_search_results):
+    @pytest.mark.asyncio
+    async def test_dedup_reduces_count(self, sample_search_results):
         """Input has 5 items with 1 duplicate URL → output should have 4."""
-        ranked = self.merger.merge_and_rank(sample_search_results, top_k=10)
+        ranked = await self.merger.merge_and_rank(sample_search_results, top_k=10)
         assert len(ranked) == 4
 
-    def test_results_sorted_by_final_score_descending(self, sample_search_results):
-        ranked = self.merger.merge_and_rank(sample_search_results, top_k=10)
+    @pytest.mark.asyncio
+    async def test_results_sorted_by_final_score_descending(self, sample_search_results):
+        ranked = await self.merger.merge_and_rank(sample_search_results, top_k=10)
         scores = [s.final_score for s in ranked]
         assert scores == sorted(scores, reverse=True), "Results not sorted by final_score"
 
-    def test_top_k_limits_output(self, sample_search_results):
-        ranked = self.merger.merge_and_rank(sample_search_results, top_k=2)
+    @pytest.mark.asyncio
+    async def test_top_k_limits_output(self, sample_search_results):
+        ranked = await self.merger.merge_and_rank(sample_search_results, top_k=2)
         assert len(ranked) <= 2
 
-    def test_empty_input(self):
-        ranked = self.merger.merge_and_rank([], top_k=10)
+    @pytest.mark.asyncio
+    async def test_empty_input(self):
+        ranked = await self.merger.merge_and_rank([], top_k=10)
         assert ranked == []
 
     def test_credibility_scoring_known_domains(self):
@@ -75,15 +90,13 @@ class TestResultMerger:
         assert score >= 0.8, "Academic domains should score high"
 
     def test_relevance_scoring_with_hyde(self):
-        """Higher keyword overlap should yield higher relevance."""
-        high_rel = self.merger._score_relevance_basic(
-            "deep learning transformers attention mechanisms",
-            "deep learning and transformer architectures",
-        )
-        low_rel = self.merger._score_relevance_basic(
-            "cooking recipes for pasta",
-            "deep learning and transformer architectures",
-        )
+        """Higher cosine similarity should yield higher relevance."""
+        emb1 = [1.0, 0.0, 0.0]
+        emb2 = [1.0, 0.0, 0.0]
+        emb3 = [0.0, 1.0, 0.0]
+        
+        high_rel = self.merger._score_relevance_semantic(emb1, emb2)
+        low_rel  = self.merger._score_relevance_semantic(emb1, emb3)
         assert high_rel > low_rel
 
     def test_recency_scoring_recent_date(self):
@@ -97,12 +110,12 @@ class TestResultMerger:
 
     def test_corroboration_calculation(self):
         sources = [
-            SourceMetadata(title="Deep Learning Survey", content="deep learning approaches"),
-            SourceMetadata(title="Deep Learning Review", content="deep learning methods and techniques"),
-            SourceMetadata(title="Cooking Recipes", content="pasta and pizza recipes"),
+            SourceMetadata(title="Deep Learning Survey", content="deep learning approaches", embedding=[1.0, 0.0, 0.0]),
+            SourceMetadata(title="Deep Learning Review", content="deep learning methods and techniques", embedding=[1.0, 0.0, 0.0]),
+            SourceMetadata(title="Cooking Recipes", content="pasta and pizza recipes", embedding=[0.0, 1.0, 0.0]),
         ]
         self.merger._calculate_corroboration(sources)
-        # The two deep learning sources should corroborate each other
+        # The two deep learning sources should corroborate each other since embeddings match exactly
         assert sources[0].corroboration >= 1 or sources[1].corroboration >= 1
 
 

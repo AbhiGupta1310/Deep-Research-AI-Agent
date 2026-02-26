@@ -1,10 +1,15 @@
 """
 Follow-up Chat Handler.
 RAG-based Q&A over generated reports using ChromaDB for retrieval.
+
+Answer flow (single LLM call max):
+  distance <= CONTEXT_THRESHOLD   → answer from context
+  distance <= DOMAIN_THRESHOLD    → domain-relevant fallback from general knowledge
+  distance >  DOMAIN_THRESHOLD    → politely decline (no LLM call)
 """
 
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 try:
     import chromadb
@@ -12,13 +17,18 @@ except ImportError:
     chromadb = None
 
 
+# Tune these two values based on your embedding model
+CONTEXT_THRESHOLD = 0.65   # chunk is a direct answer source
+DOMAIN_THRESHOLD  = 0.85   # chunk is in the same subject area but not a direct answer
+
+
 class FollowupChatHandler:
     """
     Handles follow-up questions about a generated report.
-    
+
     Flow:
     1. After report generation, chunk report → embed → store in ChromaDB.
-    2. User asks a question → embed → retrieve top-3 chunks → Claude Haiku answers.
+    2. User asks a question → embed → retrieve top-5 chunks → Claude Haiku answers.
     """
 
     def __init__(self):
@@ -30,7 +40,15 @@ class FollowupChatHandler:
             if chromadb is None:
                 print("[FollowupChat] chromadb package not installed. Chat disabled.")
                 return None
-            self._chroma_client = chromadb.Client()
+            
+            # Old Code:
+            # self._chroma_client = chromadb.Client()
+            
+            # New Code: Use PersistentClient so data survives server restarts
+            import os
+            db_path = os.path.join(os.path.dirname(__file__), "..", "chroma_data")
+            self._chroma_client = chromadb.PersistentClient(path=db_path)
+            
         return self._chroma_client
 
     async def embed_report(self, report_id: str, report_content: str) -> bool:
@@ -49,19 +67,15 @@ class FollowupChatHandler:
             return False
 
         try:
-            # Create or get collection for this report
             collection = client.get_or_create_collection(
                 name=f"report_{report_id}",
                 metadata={"hnsw:space": "cosine"},
             )
 
-            # Chunk the report by sections (split on ## headers)
             chunks = self._chunk_report(report_content)
-
             if not chunks:
                 return False
 
-            # Add chunks to collection (ChromaDB handles embedding internally)
             ids = [f"chunk_{i}" for i in range(len(chunks))]
             collection.add(
                 documents=chunks,
@@ -83,112 +97,149 @@ class FollowupChatHandler:
         llm=None,
     ) -> Dict[str, Any]:
         """
-        Answer a follow-up question about a report using RAG.
+        Answer a follow-up question using RAG + distance-based routing.
+        Maximum 1 LLM call per question.
 
         Args:
             report_id: Report identifier to search within.
             question: User's follow-up question.
-            llm: LLM instance to use for answering (Claude Haiku 3.5).
+            llm: LLM instance (Claude Haiku 3.5).
 
         Returns:
-            Dict with 'answer' and 'sources' fields.
+            Dict with 'answer', 'sources', and 'source_type' fields.
+            source_type: "context" | "general_knowledge" | "declined" | "error"
         """
         client = self._get_chroma_client()
         if client is None:
-            return {"answer": "Chat feature is not available.", "sources": []}
+            return self._make_response("Chat feature is not available.", [], "error")
+
+        if llm is None:
+            return self._make_response("LLM not configured for chat.", [], "error")
 
         try:
-            # Get the collection
             collection = client.get_collection(name=f"report_{report_id}")
 
-            # Retrieve top-3 relevant chunks
             results = collection.query(
                 query_texts=[question],
-                n_results=3,
+                n_results=min(5, collection.count()),
             )
 
-            retrieved_chunks = results.get("documents", [[]])[0]
+            retrieved_chunks: List[str] = results.get("documents", [[]])[0]
+            distances: List[float]      = results.get("distances",  [[]])[0]
 
-            if not retrieved_chunks:
-                return {
-                    "answer": "I couldn't find relevant information in the report to answer your question.",
-                    "sources": [],
-                }
+            best_distance = min(distances) if distances else 1.0
 
-            # Build context from retrieved chunks
-            context = "\n\n---\n\n".join(retrieved_chunks)
+            # ── Route based on distance ──────────────────────────────────────
 
-            if llm is None:
-                return {
-                    "answer": "LLM not configured for chat.",
-                    "sources": retrieved_chunks,
-                }
+            if best_distance <= CONTEXT_THRESHOLD:
+                # Good match in report → answer from context
+                return await self._answer_from_context(question, retrieved_chunks, llm)
 
-            # Generate answer using LLM
-            from langchain_core.messages import HumanMessage, SystemMessage
+            elif best_distance <= DOMAIN_THRESHOLD:
+                # Same domain but not covered in report → general knowledge fallback
+                return await self._answer_from_general_knowledge(question, llm)
 
-            response = llm.invoke([
-                SystemMessage(content=(
-                    "You are a helpful research assistant. Answer the user's question "
-                    "based ONLY on the following context from a research report. "
-                    "If the context doesn't contain enough information, say so.\n\n"
-                    f"Context:\n{context}"
-                )),
-                HumanMessage(content=question),
-            ])
-
-            return {
-                "answer": response.content,
-                "sources": retrieved_chunks,
-            }
+            else:
+                # Completely unrelated → decline, zero LLM calls
+                return self._make_response(
+                    (
+                        "Your question doesn't seem related to the topic of this report. "
+                        "I can only answer questions relevant to the report's subject area."
+                    ),
+                    [],
+                    "declined",
+                )
 
         except Exception as e:
             print(f"[FollowupChat] Error answering question: {e}")
-            return {"answer": f"Error: {str(e)}", "sources": []}
+            return self._make_response(f"Error: {str(e)}", [], "error")
 
-    def _chunk_report(self, content: str, max_chunk_size: int = 1000) -> List[str]:
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    async def _answer_from_context(
+        self,
+        question: str,
+        chunks: List[str],
+        llm,
+    ) -> Dict[str, Any]:
+        """Answer strictly from retrieved context chunks."""
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        context = "\n\n---\n\n".join(chunks)
+
+        response = llm.invoke([
+            SystemMessage(content=(
+                "You are a helpful research assistant. "
+                "Answer the user's question based ONLY on the following context "
+                "from a research report. Be concise and accurate. "
+                "If the context does not fully cover the question, say so.\n\n"
+                f"Context:\n{context}"
+            )),
+            HumanMessage(content=question),
+        ])
+
+        return self._make_response(response.content, chunks, "context")
+
+    async def _answer_from_general_knowledge(
+        self,
+        question: str,
+        llm,
+    ) -> Dict[str, Any]:
         """
-        Split report content into chunks by section headers.
-        Falls back to paragraph-based splitting if no headers found.
+        Answer from general knowledge when the topic is domain-relevant
+        but not covered in the report. Notifies the user clearly.
         """
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        response = llm.invoke([
+            SystemMessage(content=(
+                "You are a helpful research assistant. "
+                "The user's question is related to the report's subject area "
+                "but was not covered in the report itself. "
+                "Answer from your general knowledge. Be concise and accurate."
+            )),
+            HumanMessage(content=question),
+        ])
+
+        notice = (
+            "> ⚠️ **Not found in the report** — answering from general knowledge.\n\n"
+        )
+
+        return self._make_response(notice + response.content, [], "general_knowledge")
+
+    def _chunk_report(
+        self,
+        content: str,
+        chunk_size: int = 600,
+        overlap: int = 120,
+    ) -> List[str]:
+        """Sliding window chunking with overlap."""
+        text   = content.replace("\r", "")
         chunks = []
+        start  = 0
+        length = len(text)
 
-        # Try splitting by ## headers first
-        sections = content.split("\n## ")
-        if len(sections) > 1:
-            for i, section in enumerate(sections):
-                if i > 0:
-                    section = "## " + section
-                section = section.strip()
-                if section:
-                    # If section is too large, sub-chunk by paragraphs
-                    if len(section) > max_chunk_size:
-                        paragraphs = section.split("\n\n")
-                        current_chunk = ""
-                        for para in paragraphs:
-                            if len(current_chunk) + len(para) > max_chunk_size and current_chunk:
-                                chunks.append(current_chunk.strip())
-                                current_chunk = para
-                            else:
-                                current_chunk += "\n\n" + para
-                        if current_chunk.strip():
-                            chunks.append(current_chunk.strip())
-                    else:
-                        chunks.append(section)
-        else:
-            # Fallback: split by double newlines (paragraphs)
-            paragraphs = content.split("\n\n")
-            current_chunk = ""
-            for para in paragraphs:
-                if len(current_chunk) + len(para) > max_chunk_size and current_chunk:
-                    chunks.append(current_chunk.strip())
-                    current_chunk = para
-                else:
-                    current_chunk += "\n\n" + para
-            if current_chunk.strip():
-                chunks.append(current_chunk.strip())
+        while start < length:
+            chunk = text[start : start + chunk_size].strip()
+            if chunk:
+                chunks.append(chunk)
+            start += chunk_size - overlap
 
         return chunks
+
+    @staticmethod
+    def _make_response(
+        answer: str,
+        sources: List[str],
+        source_type: str,
+    ) -> Dict[str, Any]:
+        return {
+            "answer": answer,
+            "sources": sources,
+            "source_type": source_type,
+        }
 
     @staticmethod
     def generate_report_id() -> str:

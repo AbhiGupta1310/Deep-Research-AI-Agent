@@ -3,9 +3,12 @@ Result Merger + Credibility Ranker.
 Pools results from all search providers, deduplicates, and ranks by credibility.
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
+import asyncio
+
+from ..embeddings import embed_text, embed_texts, cosine_similarity
 
 
 # Domain authority tiers for credibility scoring
@@ -39,6 +42,8 @@ class SourceMetadata:
     content: str = ""
     raw_content: str = ""
     source_type: str = ""          # tavily, serper, arxiv, wikipedia, newsapi
+    # Optional embedding vector for corroboration calculation
+    embedding: Optional[List[float]] = field(default=None, repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -65,7 +70,7 @@ class ResultMerger:
     RELEVANCE_WEIGHT = 0.4
     CORROBORATION_WEIGHT = 0.15
 
-    def merge_and_rank(
+    async def merge_and_rank(
         self,
         all_results: List[Dict[str, Any]],
         hyde_document: str = "",
@@ -88,9 +93,16 @@ class ResultMerger:
         # Step 1: Deduplicate by URL
         unique_results = self._deduplicate_by_url(all_results)
 
-        # Step 2: Convert to SourceMetadata and score each
+        # Step 2: Fetch embeddings for HyDE and all deduplicated documents in parallel
+        hyde_embedding_task = embed_text(hyde_document)
+        contents_to_embed = [res.get("content", "") for res in unique_results]
+        doc_embeddings_task = embed_texts(contents_to_embed)
+        
+        hyde_emb, doc_embeddings = await asyncio.gather(hyde_embedding_task, doc_embeddings_task)
+
+        # Step 3: Convert to SourceMetadata and score each
         scored_results = []
-        for result in unique_results:
+        for i, result in enumerate(unique_results):
             metadata = SourceMetadata(
                 url=result.get("url", ""),
                 title=result.get("title", "Untitled"),
@@ -99,6 +111,7 @@ class ResultMerger:
                 raw_content=result.get("raw_content", ""),
                 publish_date=result.get("publish_date", ""),
                 source_type=result.get("source_type", "unknown"),
+                embedding=doc_embeddings[i]
             )
 
             # Score credibility based on domain
@@ -107,14 +120,14 @@ class ResultMerger:
             # Score recency based on publish date
             metadata.recency_score = self._score_recency(metadata.publish_date)
 
-            # Relevance scoring (basic keyword overlap — will be upgraded to embedding cosine in later phases)
-            metadata.relevance_score = self._score_relevance_basic(
-                metadata.content, hyde_document
+            # Relevance scoring using embedding cosine similarity
+            metadata.relevance_score = self._score_relevance_semantic(
+                metadata.embedding, hyde_emb
             )
 
             scored_results.append(metadata)
 
-        # Step 3: Calculate corroboration (how many sources cover similar content)
+        # Step 4: Calculate corroboration (how many sources cover similar content)
         self._calculate_corroboration(scored_results)
 
         # Step 4: Calculate final weighted score
@@ -193,44 +206,42 @@ class ResultMerger:
         except Exception:
             return 0.3
 
-    def _score_relevance_basic(self, content: str, hyde_document: str) -> float:
+    def _score_relevance_semantic(self, content_emb: Optional[List[float]], hyde_emb: Optional[List[float]]) -> float:
         """
-        Basic relevance scoring using keyword overlap.
-        Will be upgraded to embedding cosine similarity in Phase 6.
+        Relevance scoring using embedding cosine similarity.
         """
-        if not hyde_document or not content:
+        if not hyde_emb or not content_emb:
             return 0.5
 
-        # Simple word overlap ratio
-        hyde_words = set(hyde_document.lower().split())
-        content_words = set(content.lower().split())
-
-        if not hyde_words:
-            return 0.5
-
-        overlap = len(hyde_words & content_words)
-        score = min(overlap / max(len(hyde_words) * 0.3, 1), 1.0)
-        return max(score, 0.1)
+        # Extract value between 0.0 and 1.0 safely from cosine similarity (-1.0 to 1.0)
+        sim = cosine_similarity(content_emb, hyde_emb)
+        # Shift domain [-1, 1] to [0, 1] loosely, or just bound it:
+        score = max(sim, 0.1)
+        return min(score, 1.0)
 
     def _calculate_corroboration(self, results: List[SourceMetadata]) -> None:
         """
         Calculate corroboration — how many other sources cover similar content.
-        Uses basic title/keyword overlap. Will be upgraded to embeddings later.
+        Uses semantic embedding similarity matching.
         """
         for i, result_a in enumerate(results):
             count = 0
-            words_a = set(result_a.title.lower().split())
+            if not result_a.embedding:
+                result_a.corroboration = count
+                continue
+                
             for j, result_b in enumerate(results):
-                if i == j:
+                if i == j or not result_b.embedding:
                     continue
-                words_b = set(result_b.title.lower().split())
-                # If titles share significant overlap, count as corroboration
-                if len(words_a & words_b) >= 2:
+                
+                # If content embeddings share significant similarity
+                sim = cosine_similarity(result_a.embedding, result_b.embedding)
+                if sim >= 0.75:  # High cosine similarity indicates corroboration
                     count += 1
             result_a.corroboration = count
 
 
-def format_ranked_results(sources: List[SourceMetadata], max_tokens: int = 15000) -> str:
+def format_ranked_results(sources: List[SourceMetadata], max_tokens: int = 10000) -> str:
     """
     Format ranked sources into a string for LLM consumption.
 

@@ -22,6 +22,11 @@ import {
   Brain,
   FileCheck,
   ArrowRight,
+  Check,
+  RefreshCw,
+  CheckCircle,
+  XCircle,
+  Activity,
 } from "lucide-react";
 import "./App.css";
 
@@ -55,6 +60,7 @@ function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [suggestionChips, setSuggestionChips] = useState([]);
 
   // Report metadata state
   const [confidenceScores, setConfidenceScores] = useState({});
@@ -149,6 +155,7 @@ function App() {
     setRuntimeSeconds(0);
     setCostEstimate(0);
     setJsonReport(null);
+    setSuggestionChips([]);
 
     try {
       const response = await fetch(`${API_URL}/api/research`, {
@@ -198,33 +205,12 @@ function App() {
   const handleSSEEvent = (eventData) => {
     const { type, message, data } = eventData;
 
-    const iconMap = {
-      query_analyzing: "🔍",
-      query_analyzed: "✅",
-      cache_hit: "⚡",
-      plan_generating: "📋",
-      plan_generated: "✅",
-      section_researching: "🔎",
-      section_writing: "✍️",
-      section_complete: "✅",
-      reflection_loop: "🔄",
-      fact_checking: "🔬",
-      fact_check_complete: "✅",
-      synthesis_writing: "✍️",
-      compiling_output: "📄",
-      report_ready: "🎉",
-      error: "❌",
-    };
-
-    const icon = iconMap[type] || "🔄";
-
     setProgressSteps((prev) => [
       ...prev,
       {
         id: Date.now(),
         type,
         message,
-        icon,
         data: data || {},
         timestamp: new Date().toLocaleTimeString(),
       },
@@ -242,6 +228,15 @@ function App() {
       setRuntimeSeconds(data.runtime_seconds || 0);
       setCostEstimate(data.cost_estimate_usd || 0);
       setJsonReport(data.json_report || null);
+      if (data.suggestion_chips && data.suggestion_chips.length > 0) {
+        setSuggestionChips(data.suggestion_chips);
+      } else {
+        setSuggestionChips([
+          "What are the key findings?",
+          "Which sources were most cited?",
+          "Any limitations or gaps?",
+        ]);
+      }
       setLoading(false);
     }
 
@@ -295,11 +290,42 @@ function App() {
     if (reportUrl) window.open(reportUrl, "_blank");
   };
 
-  const SUGGESTION_CHIPS = [
-    "What are the key findings?",
-    "Which sources were most cited?",
-    "Any limitations or gaps?",
-  ];
+  const getStepIcon = (type) => {
+    switch (type) {
+      case "query_analyzing":
+        return <Search size={16} />;
+      case "query_analyzed":
+        return <Check size={16} />;
+      case "cache_hit":
+        return <Zap size={16} />;
+      case "plan_generating":
+        return <FileText size={16} />;
+      case "plan_generated":
+        return <Check size={16} />;
+      case "section_researching":
+        return <Search size={16} />;
+      case "section_writing":
+        return <FileText size={16} />;
+      case "section_complete":
+        return <Check size={16} />;
+      case "reflection_loop":
+        return <RefreshCw size={16} />;
+      case "fact_checking":
+        return <Shield size={16} />;
+      case "fact_check_complete":
+        return <Check size={16} />;
+      case "synthesis_writing":
+        return <FileText size={16} />;
+      case "compiling_output":
+        return <Database size={16} />;
+      case "report_ready":
+        return <CheckCircle size={16} />;
+      case "error":
+        return <XCircle size={16} />;
+      default:
+        return <Activity size={16} />;
+    }
+  };
 
   return (
     <>
@@ -495,14 +521,14 @@ function App() {
         {/* Progress Timeline */}
         {progressSteps.length > 0 && (
           <div className="progress-timeline">
-            <h3 className="timeline-title">Research Progress</h3>
+            <h3 className="timeline-title">System Activity</h3>
             <div className="timeline-steps">
               {progressSteps.map((step) => (
                 <div
                   key={step.id}
                   className={`timeline-step ${step.type === "error" ? "step-error" : ""}`}
                 >
-                  <span className="step-icon">{step.icon}</span>
+                  <span className="step-icon">{getStepIcon(step.type)}</span>
                   <span className="step-message">{step.message}</span>
                   {step.data?.sections && (
                     <span className="step-badge">
@@ -592,20 +618,7 @@ function App() {
               </div>
             )}
 
-            {/* Executive Summary Card */}
-            {executiveSummary && (
-              <div className="exec-summary-card">
-                <div className="exec-summary-header">
-                  <BookOpen size={15} />
-                  <span>Executive Summary</span>
-                </div>
-                <div className="exec-summary-body">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {executiveSummary}
-                  </ReactMarkdown>
-                </div>
-              </div>
-            )}
+            {/* Executive Summary Card removed strictly to prevent duplication */}
 
             {/* Format Tabs */}
             <div className="format-tabs">
@@ -691,9 +704,9 @@ function App() {
                     size={20}
                     style={{ marginBottom: "0.5rem", opacity: 0.5 }}
                   />
-                  <p>Ask any question about the generated report.</p>
+                  <p>Ask about the contents of this report.</p>
                   <div className="suggestion-chips">
-                    {SUGGESTION_CHIPS.map((chip, i) => (
+                    {suggestionChips.map((chip, i) => (
                       <button
                         key={i}
                         className="suggestion-chip"
@@ -708,20 +721,6 @@ function App() {
               {chatMessages.map((msg, i) => (
                 <div key={i} className={`chat-message ${msg.role}`}>
                   <div className="message-content">{msg.content}</div>
-                  {msg.role === "assistant" &&
-                    msg.sources &&
-                    msg.sources.length > 0 && (
-                      <div className="chat-sources">
-                        <span className="sources-label">Sources cited:</span>
-                        {msg.sources.map((src, j) => (
-                          <div key={j} className="source-snippet">
-                            {src.length > 120
-                              ? src.substring(0, 120) + "…"
-                              : src}
-                          </div>
-                        ))}
-                      </div>
-                    )}
                 </div>
               ))}
               {chatLoading && (
@@ -736,7 +735,7 @@ function App() {
             <div className="chat-input-area">
               <input
                 type="text"
-                placeholder="Ask a follow-up question..."
+                placeholder="Ask a question about the report..."
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleChat()}

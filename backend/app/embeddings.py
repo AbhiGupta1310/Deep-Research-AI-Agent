@@ -62,16 +62,39 @@ async def embed_text(text: str) -> Optional[List[float]]:
 
 async def embed_texts(texts: List[str]) -> List[Optional[List[float]]]:
     """
-    Embed multiple texts in parallel.
-
-    Args:
-        texts: List of texts to embed.
-
-    Returns:
-        List of embedding vectors (or None for failures).
+    Embed multiple texts in a single batch API call.
     """
-    tasks = [embed_text(text) for text in texts]
-    return await asyncio.gather(*tasks)
+    if not texts:
+        return []
+
+    client = _get_openai_client()
+    if client is None:
+        return [None] * len(texts)
+
+    model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+
+    # Truncate all texts to avoid token limits per item
+    # Provide a fallback empty string if a text chunk is None
+    truncated_texts = [text[:8000] if text else "" for text in texts]
+
+    try:
+        # Pass the entire list to the input parameter for ONE single HTTP request
+        response = await asyncio.to_thread(
+            lambda: client.embeddings.create(
+                input=truncated_texts,
+                model=model,
+            )
+        )
+        
+        # The API returns them in the exact order they were sent
+        # We sort by 'index' just to be absolutely safe
+        sorted_data = sorted(response.data, key=lambda x: x.index)
+        return [item.embedding for item in sorted_data]
+
+    except Exception as e:
+        print(f"[Embeddings] Error batch embedding texts: {e}")
+        # Return a list of Nones so downstream zip/enumerate doesn't break
+        return [None] * len(texts)
 
 
 def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:

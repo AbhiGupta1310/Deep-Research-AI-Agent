@@ -57,6 +57,22 @@ class Queries(BaseModel):
     )
 
 
+class SearchRoute(BaseModel):
+    """Routing instructions for a single search query."""
+    query: str = Field(description="The search query being routed.")
+    use_tavily: bool = Field(description="True if general web search (Tavily) is needed. Good for broad topics, companies, or recent unstructured data.")
+    use_wikipedia: bool = Field(description="True if Wikipedia is needed. Good for established concepts, history, and foundational factual overviews.")
+    use_arxiv: bool = Field(description="True if ArXiv is needed. Good for computer science, physics, mathematics, and academic research papers.")
+    use_news: bool = Field(description="True if News API is needed. Good for current events, politics, recent business developments, or very recent topics.")
+
+
+class SearchRoutes(BaseModel):
+    """Collection of search routes mapping 1-to-1 with queries."""
+    routes: List[SearchRoute] = Field(
+        description="List of search routes corresponding to each search query.",
+    )
+
+
 class SourceMetadata(BaseModel):
     """Metadata for a single source result with credibility scoring."""
     url: str = Field(default="", description="Source URL.")
@@ -72,43 +88,15 @@ class SourceMetadata(BaseModel):
     source_type: str = Field(default="", description="Provider type: tavily, serper, arxiv, wikipedia, newsapi.")
 
 
-class CriticFeedback(BaseModel):
-    """Structured feedback from the critic agent evaluating a section draft."""
-    gaps_found: bool = Field(
-        description="Whether any knowledge gaps, unsupported claims, or issues were found.",
-    )
-    knowledge_gaps: List[str] = Field(
-        default_factory=list,
-        description="List of identified knowledge gaps in the section.",
-    )
-    unsupported_claims: List[str] = Field(
-        default_factory=list,
-        description="Claims made without sufficient source support.",
-    )
-    outdated_data: List[str] = Field(
-        default_factory=list,
-        description="Data points that appear to be outdated (>12 months old).",
-    )
-    contradictions: List[str] = Field(
-        default_factory=list,
-        description="Contradictions found between different sources.",
-    )
-    suggested_queries: List[str] = Field(
-        default_factory=list,
-        description="Targeted re-search queries to fill the identified gaps.",
-    )
-    confidence_score: float = Field(
-        default=50.0,
-        description="Overall confidence in the section quality (0–100).",
-    )
-
-
-class SectionWithConfidence(Section):
-    """Section extended with a confidence score from the critic."""
-    confidence_score: float = Field(
-        default=0.0,
-        description="Critic-assessed confidence score (0–100).",
-    )
+class QueryAnalysisAndHyDE(BaseModel):
+    """Structured output for the fused Query Analyzer and HyDE generator."""
+    intent: str = Field(description="The core intent of the user.")
+    scope: str = Field(description="The scope of the report (e.g., broad survey, focused deep-dive).")
+    domain: str = Field(description="The domain or field of study (e.g., technology, business, science, news, medical).")
+    output_format: str = Field(description="The ideal output format.")
+    entities: str = Field(description="Comma-separated major entities or concepts.")
+    time_sensitivity: str = Field(description="Time sensitivity (e.g., recent, historical).")
+    hyde_document: str = Field(description="A 200-300 word hypothetical ideal answer to serve as a search anchor.")
 
 
 # ============================================================
@@ -134,14 +122,11 @@ class ReportState(TypedDict):
     hyde_document: str                                      # HyDE hypothetical ideal answer
     sub_queries: list[str]                                  # Expanded sub-queries from HyDE
     search_results: dict                                    # Per-section search results
-    reflection_count: dict                                  # Per-section reflection loop counter (max 3)
-    knowledge_gaps: dict                                    # Per-section gaps found by critic
-    confidence_scores: dict                                 # Per-section confidence (0–100)
-    fact_check_flags: list[str]                             # Flagged low-confidence claims
-    sources: list[dict]                                     # Full source metadata with credibility
+    sources: Annotated[list, operator.add]                  # Full source metadata with credibility
     cache_hit: bool                                         # Whether result was served from cache
     langsmith_run_id: str                                   # LangSmith trace ID
     output_metadata: dict                                   # Output compiler results (paths, URLs, scores)
+    domain: str                                             # Extracted domain from query analyzer
 
 
 class SectionState(TypedDict):
@@ -151,13 +136,12 @@ class SectionState(TypedDict):
     report_sections_from_research: str                      # Context from other completed sections
     completed_sections: list[Section]                       # Accumulated for Send() API
     # v2.0 additions
-    reflection_count: int                                   # Loop counter for this section (max 3)
-    knowledge_gaps: list[str]                               # Gaps identified by critic
-    confidence_score: float                                 # Section confidence (0–100)
     search_results: list[dict]                              # Raw search results with metadata
-    critic_feedback: CriticFeedback                         # Latest critic evaluation
     hyde_document: str                                      # HyDE context passed from parent
+    domain: str                                             # Extracted domain from query analyzer
+    depth: str                                              # Quick or Deep depth variable
 
 
 class SectionOutputState(TypedDict):
     completed_sections: list[Section]                       # Final output key for Send() API
+    sources: list[dict]                                     # Aggregated sources from this section

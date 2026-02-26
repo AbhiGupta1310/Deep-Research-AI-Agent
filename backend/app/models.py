@@ -39,7 +39,7 @@ def _create_llm(model_env_var: str, temperature: float = 0, timeout: int = 60) -
 
 def get_cheap_llm() -> ChatOpenAI:
     """
-    Get the cheap-tier LLM (Gemini Flash 2.0).
+    Get the cheap-tier LLM.
     Used for: query analysis, HyDE, report planning, query rewriting,
     critic/reflection, fact-checking.
     Cost: ~$0.0002–$0.0005 per call.
@@ -52,23 +52,23 @@ def get_cheap_llm() -> ChatOpenAI:
 
 def get_mid_llm() -> ChatOpenAI:
     """
-    Get the mid-tier LLM (Claude Haiku 3.5).
+    Get the mid-tier LLM.
     Used for: section writing, follow-up chat.
     Cost: ~$0.001 per call.
     """
     global _mid_llm
     if _mid_llm is None:
-        _mid_llm = _create_llm("LLM_MODEL_MID", temperature=0)
+        _mid_llm = _create_llm("LLM_MODEL_MID", temperature=0.3)
     return _mid_llm
 
 
 def get_premium_llm() -> ChatOpenAI:
     """
-    Get the premium-tier LLM (Claude Sonnet 3.5).
+    Get the premium-tier LLM.
     Used for: final synthesis writer — ONE call per query.
     Cost: ~$0.015 per call.
     """
     global _premium_llm
     if _premium_llm is None:
-        _premium_llm = _create_llm("LLM_MODEL_PREMIUM", temperature=0, timeout=120)
+        _premium_llm = _create_llm("LLM_MODEL_PREMIUM", temperature=0.6, timeout=120)
     return _premium_llm

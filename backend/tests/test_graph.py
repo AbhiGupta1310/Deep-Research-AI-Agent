@@ -23,7 +23,7 @@ class TestSectionBuilderSubagent:
         from app.state import SectionState, SectionOutputState
         from app.nodes import (
             query_rewriter_expander, multi_source_search, result_merger_ranker,
-            write_section, critic_agent,
+            write_section,
         )
 
         builder = StateGraph(SectionState, output=SectionOutputState)
@@ -31,7 +31,6 @@ class TestSectionBuilderSubagent:
         builder.add_node("multi_source_search", multi_source_search)
         builder.add_node("result_merger_ranker", result_merger_ranker)
         builder.add_node("write_section", write_section)
-        builder.add_node("critic_agent", critic_agent)
 
         node_names = set(builder.nodes.keys())
         expected = {
@@ -39,7 +38,6 @@ class TestSectionBuilderSubagent:
             "multi_source_search",
             "result_merger_ranker",
             "write_section",
-            "critic_agent",
         }
         assert expected.issubset(node_names)
 
@@ -61,7 +59,7 @@ class TestReporterAgent:
         # Check by importing node functions (they should all exist)
         from app.nodes import (
             query_analyzer_hyde, generate_report_plan,
-            aggregator_deduplicator, fact_checker,
+            aggregator_deduplicator,
             final_synthesis_writer,
         )
         from app.output_compiler import output_compiler_node
@@ -70,15 +68,16 @@ class TestReporterAgent:
         assert callable(query_analyzer_hyde)
         assert callable(generate_report_plan)
         assert callable(aggregator_deduplicator)
-        assert callable(fact_checker)
         assert callable(final_synthesis_writer)
         assert callable(output_compiler_node)
 
     def test_removed_nodes_dont_exist(self):
-        """format_completed_sections should no longer be importable from nodes."""
+        """format_completed_sections, critic_agent, should_reflect, and fact_checker should no longer be importable from nodes."""
         from app import nodes
         assert not hasattr(nodes, "format_completed_sections"), \
             "format_completed_sections should have been removed"
+        assert not hasattr(nodes, "critic_agent"), "critic_agent should have been removed"
+        assert not hasattr(nodes, "fact_checker"), "fact_checker should have been removed"
 
     def test_new_nodes_exist(self):
         """result_merger_ranker and aggregator_deduplicator should exist."""
@@ -118,11 +117,12 @@ class TestNodeFunctions:
         urls = [s["url"] for s in deduped]
         assert len(urls) == len(set(urls)), "Duplicate sources not removed"
 
-    def test_result_merger_ranker_handles_empty_results(self):
+    @pytest.mark.asyncio
+    async def test_result_merger_ranker_handles_empty_results(self):
         from app.nodes import result_merger_ranker
         from app.state import Section
 
         section = Section(name="Test", description="Test desc", plan="Plan", research=True, content="")
-        result = result_merger_ranker({"section": section, "search_results": []})
+        result = await result_merger_ranker({"section": section, "search_results": []})
         assert result["source_str"] == "No search results available."
         assert result["search_results"] == []

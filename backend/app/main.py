@@ -13,10 +13,26 @@ from .output_compiler import OutputCompiler
 from .chat.followup import FollowupChatHandler
 from .cache.redis_cache import SemanticCache
 from .cost_tracker import CostTracker
+from .models import get_cheap_llm
+from langchain_core.messages import HumanMessage, SystemMessage
 from dotenv import load_dotenv
 import re
 import asyncio
 import json
+import random
+import warnings
+
+# Aggressively suppress Pydantic V2 serialization warnings
+warnings.filterwarnings(
+    "ignore", 
+    category=UserWarning, 
+    message=".*Pydantic serializer warnings.*"
+)
+warnings.filterwarnings(
+    "ignore", 
+    category=UserWarning, 
+    message=".*PydanticSerializationUnexpectedValue.*"
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -64,6 +80,15 @@ _semantic_cache = SemanticCache()
 _output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs")
 
 
+class RequestQuestions(BaseModel):
+    """Structured output for targeted summary follow-up questions."""
+    questions: list[str] = Field(
+        ..., 
+        description="Exactly 10 targeted questions that can be answered using the report.",
+        min_length=10,
+        max_length=10
+    )
+
 class ResearchRequest(BaseModel):
     topic: str = Field(..., max_length=500, description="Research topic (max 500 chars)")
     depth: str = Field(default="deep", description="Research depth: 'quick' or 'deep'")
@@ -94,7 +119,7 @@ async def conduct_research(request: ResearchRequest):
                 # Emit initial event
                 await sse_manager.emit(
                     EventTypes.QUERY_ANALYZING,
-                    "🔍 Analyzing your query...",
+                    "Analyzing your query...",
                 )
 
                 # Stream events from the graph
@@ -103,7 +128,7 @@ async def conduct_research(request: ResearchRequest):
 
                 # Run the graph and emit progress events
                 async for event in reporter_agent.astream(
-                    {"topic": topic},
+                    {"topic": topic, "metadata": {"topic": topic, "depth": depth}},
                     config={
                         "recursion_limit": 50,
                         "metadata": {"topic": topic, "depth": depth},
@@ -127,15 +152,47 @@ async def conduct_research(request: ResearchRequest):
                 if not final_report:
                     await sse_manager.emit(
                         EventTypes.ERROR,
-                        "❌ Failed to generate report (Agent returned no report).",
+                        "Failed to generate report (Agent returned no report).",
                     )
                     await sse_manager.close()
                     return
 
+                # Build dynamic chat suggestion chips using cheap LLM
+                suggestion_chips = []
+                if final_report:
+                    try:
+                        # 1. Check if chips were already cached
+                        cached_entry = await _semantic_cache.check_cache(topic)
+                        all_chips = []
+                        if cached_entry and "suggestion_chips" in cached_entry and cached_entry["suggestion_chips"]:
+                            all_chips = cached_entry["suggestion_chips"]
+                        else:
+                            # 2. Generate 10 manually via prompt if not found
+                            structured_llm = get_cheap_llm().with_structured_output(RequestQuestions)
+                            instructions = "You are a concise AI. Generate exactly 10 insightful questions that can be answered DIRECTLY using the provided report snippet. These questions will be shown to users as suggestions to ask the document. Keep them short, distinct, and under 10 words each."
+                            usr_msg = f"Report Snippet:\n\n{final_report[:3000]}"
+                            res = await structured_llm.ainvoke([
+                                SystemMessage(content=instructions),
+                                HumanMessage(content=usr_msg)
+                            ])
+                            all_chips = res.questions
+                            
+                            # 3. Save all 10 into cache to prevent future re-generation
+                            if cached_entry:
+                                cached_entry["suggestion_chips"] = all_chips
+                                await _semantic_cache.store_result(topic, cached_entry)
+                                
+                        # 4. Pick exactly 3 random chips to show the user
+                        if all_chips:
+                            suggestion_chips = random.sample(all_chips, min(3, len(all_chips)))
+                    except Exception as e:
+                        logger.warning(f"Failed to generate dynamic chat chips: {e}")
+                
                 # Build the rich completion payload
                 report_id = (output_metadata or {}).get("report_id", "unknown")
                 completion_data = {
                     "report_id": report_id,
+                    "suggestion_chips": suggestion_chips,
                     "content": final_report,
                     "chat_enabled": (output_metadata or {}).get("chat_enabled", False),
                     # PDF
@@ -148,7 +205,6 @@ async def conduct_research(request: ResearchRequest):
                     "json_url": f"/api/reports/{report_id}/json",
                     "json_report": (output_metadata or {}).get("json_data", {}),
                     # Confidence & sources
-                    "confidence_scores": (output_metadata or {}).get("confidence_scores", {}),
                     "source_count": (output_metadata or {}).get("source_count", 0),
                     "runtime_seconds": (output_metadata or {}).get("runtime_seconds", 0),
                     # Cost estimate
@@ -160,7 +216,7 @@ async def conduct_research(request: ResearchRequest):
                 # Emit completion event with all data
                 await sse_manager.emit(
                     EventTypes.REPORT_READY,
-                    "🎉 Report ready!",
+                    "Report ready!",
                     data=completion_data,
                 )
 
@@ -168,7 +224,7 @@ async def conduct_research(request: ResearchRequest):
             logger.error(f"Error during research: {e}", exc_info=True)
             await sse_manager.emit(
                 EventTypes.ERROR,
-                f"❌ Error: {str(e)}",
+                f"Error: {str(e)}",
             )
         finally:
             await sse_manager.close()
@@ -194,51 +250,39 @@ def _map_node_to_sse_event(node_name: str, node_output) -> dict | None:
     event_map = {
         "query_analyzer_hyde": {
             "event_type": EventTypes.QUERY_ANALYZING,
-            "message": "🧠 Analyzing query & generating search anchor...",
+            "message": "Analyzing query & generating search anchor...",
         },
         "generate_report_plan": {
             "event_type": EventTypes.PLAN_GENERATED,
-            "message": "📋 Report plan generated",
+            "message": "Report plan generated",
         },
         "query_rewriter_expander": {
             "event_type": EventTypes.SECTION_RESEARCHING,
-            "message": "🔎 Expanding search queries with HyDE...",
+            "message": "Expanding search queries with HyDE...",
         },
         "multi_source_search": {
             "event_type": EventTypes.SECTION_RESEARCHING,
-            "message": "🌐 Searching 5 sources in parallel...",
+            "message": "Searching 5 sources in parallel...",
         },
         "result_merger_ranker": {
             "event_type": EventTypes.SECTION_RESEARCHING,
-            "message": "🔀 Merging & ranking search results...",
+            "message": "Merging & ranking search results...",
         },
         "write_section": {
             "event_type": EventTypes.SECTION_RESEARCHING,
-            "message": "✍️ Writing section draft...",
-        },
-        "critic_agent": {
-            "event_type": EventTypes.SECTION_RESEARCHING,
-            "message": "🔍 Critic evaluating section quality...",
-        },
-        "section_builder_with_web_search": {
-            "event_type": EventTypes.SECTION_COMPLETE,
-            "message": "✅ Section research complete",
+            "message": "Writing section draft...",
         },
         "aggregator_deduplicator": {
             "event_type": EventTypes.SECTION_COMPLETE,
-            "message": "📝 Aggregating sections & deduplicating sources...",
-        },
-        "fact_checker": {
-            "event_type": EventTypes.FACT_CHECKING,
-            "message": "🔬 Fact-checking claims across sources...",
+            "message": "Aggregating sections & deduplicating sources...",
         },
         "final_synthesis_writer": {
             "event_type": EventTypes.SYNTHESIS_WRITING,
-            "message": "✨ Premium synthesis: writing final report...",
+            "message": "Premium synthesis: writing final report...",
         },
         "output_compiler": {
             "event_type": EventTypes.COMPILING_OUTPUT,
-            "message": "📄 Compiling report into PDF, Markdown & JSON...",
+            "message": "Compiling report into PDF, Markdown & JSON...",
         },
     }
 
@@ -255,14 +299,14 @@ def _map_node_to_sse_event(node_name: str, node_output) -> dict | None:
                     elif isinstance(s, dict) and "name" in s:
                         section_names.append(s["name"])
                 data["sections"] = section_names
-                mapping["message"] = f"📋 Report plan generated ({len(section_names)} sections)"
+                mapping["message"] = f"Report plan generated ({len(section_names)} sections)"
 
             if "completed_sections" in node_output:
                 completed = node_output["completed_sections"]
                 if completed:
                     last_section = completed[-1]
                     name = last_section.name if hasattr(last_section, "name") else str(last_section)
-                    mapping["message"] = f"✅ Section complete: {name}"
+                    mapping["message"] = f"Section complete: {name}"
                     data["section_name"] = name
 
         return {**mapping, "data": data}

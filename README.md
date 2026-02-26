@@ -26,31 +26,44 @@ A fully autonomous, multi-source research agent that generates publication-quali
 16. [Running the Application](#running-the-application)
 17. [API Endpoints](#api-endpoints)
 18. [Technologies Used](#technologies-used)
+19. [Deployment Guide](#deployment-guide)
 
 ---
 
 ## Architecture Overview
 
-The system is split into two independently running services:
-
-| Service  | Stack                      | Port |
-| -------- | -------------------------- | ---- |
-| Backend  | Python, FastAPI, LangGraph | 8000 |
-| Frontend | React 19, Vite 7           | 5173 |
-
-The backend exposes a streaming HTTP endpoint (`POST /api/research`) that accepts a topic and returns a stream of Server-Sent Events as the LangGraph pipeline progresses through its nodes. When the pipeline finishes, the final event contains the complete report in Markdown, a link to the generated PDF, and structured JSON.
+### Main Reporter Agent
 
 ```
-Frontend (React)
-    |
-    |  POST /api/research  { topic, depth, output_format }
-    |  -----> SSE stream  (progress events)
-    |  <-----  REPORT_READY  (markdown + pdf_url + json)
-    |
-    |  POST /api/chat/{report_id}  { question }
-    |  <-----  { answer, sources }
-    |
-Backend (FastAPI + LangGraph)
+START
+  |
+  v
+query_analyzer_hyde
+  |
+  |--- [cache hit] ---> output_compiler ---> END
+  |
+  |--- [cache miss]
+  v
+generate_report_plan
+  |
+  |  Send() fan-out (one per section)
+  v
+section_builder_with_web_search  (parallel, N sections)
+  |
+  v
+aggregator_deduplicator
+  |
+  v
+fact_checker
+  |
+  v
+final_synthesis_writer   (single premium LLM call)
+  |
+  v
+output_compiler
+  |
+  v
+END
 ```
 
 ---
@@ -135,29 +148,32 @@ deep_research_agent/
 |   |-- app/
 |   |   |-- __init__.py
 |   |   |-- main.py               # FastAPI app, SSE streaming, API endpoints
-|   |   |-- graph.py              # LangGraph definition (main + section subagent)
-|   |   |-- nodes.py              # All graph node functions
-|   |   |-- state.py              # Pydantic models and TypedDict state schemas
-|   |   |-- prompts.py            # All LLM prompt templates
-|   |   |-- models.py             # Three-tier LLM factory (cheap/mid/premium)
-|   |   |-- sse.py                # SSE event manager
-|   |   |-- embeddings.py         # OpenAI embedding utility + cosine similarity
+|   |   |-- graph.py              # LangGraph orchestration (main + subagent)
+|   |   |-- nodes.py              # All graph node implementations
+|   |   |-- state.py              # Pydantic models and TypedDict schemas
+|   |   |-- prompts.py            # LLM prompt templates
+|   |   |-- models.py             # 3-tier LLM factory (cheap/mid/premium)
+|   |   |-- sse.py                # SSE event manager for real-time streaming
+|   |   |-- embeddings.py         # OpenAI embedding utility + similarity check
 |   |   |-- cost_tracker.py       # Per-call LLM cost tracking
-|   |   |-- output_compiler.py    # Multi-format report compiler (PDF/MD/JSON)
+|   |   |-- output_compiler.py    # Multi-format compiler (PDF/MD/JSON)
 |   |   |-- utils.py              # Shared utilities
 |   |   |-- search/
-|   |   |   |-- __init__.py       # Provider exports
+|   |   |   |-- __init__.py
 |   |   |   |-- tavily_search.py  # Tavily deep web search
 |   |   |   |-- serper_search.py  # Serper Google search
 |   |   |   |-- arxiv_search.py   # ArXiv academic papers
-|   |   |   |-- wikipedia_search.py  # Wikipedia articles
+|   |   |   |-- wikipedia_search.py # Wikipedia articles
 |   |   |   |-- news_search.py    # NewsAPI recent articles
 |   |   |   |-- merger.py         # Result deduplication + credibility ranking
 |   |   |-- cache/
-|   |   |   |-- redis_cache.py    # Redis semantic cache (embedding similarity)
+|   |   |   |-- __init__.py
+|   |   |   |-- redis_cache.py    # Redis semantic cache
 |   |   |-- chat/
+|   |       |-- __init__.py
 |   |       |-- followup.py       # ChromaDB RAG for follow-up Q&A
 |   |-- tests/
+|   |   |-- __init__.py
 |   |   |-- conftest.py           # Shared fixtures
 |   |   |-- test_models.py
 |   |   |-- test_search_providers.py
@@ -165,8 +181,10 @@ deep_research_agent/
 |   |   |-- test_cache.py
 |   |   |-- test_cost_tracker.py
 |   |   |-- test_graph.py
-|   |-- requirements.txt
-|   |-- outputs/                  # Generated reports (PDF, MD, JSON)
+|   |   |-- test_llm_ids.py       # LLM fallback and tracking tests
+|   |-- test_api_keys.py          # Script to selectively test API keys
+|   |-- requirements.txt          # Python dependencies
+|   |-- outputs/                  # Generated reports (.md, .pdf, .json)
 |
 |-- frontend/
 |   |-- src/
@@ -174,13 +192,17 @@ deep_research_agent/
 |   |   |-- App.css               # Full application styles
 |   |   |-- main.jsx              # Vite entry point
 |   |   |-- index.css             # Global styles
-|   |-- package.json
+|   |-- index.html                # Frontend HTML template
+|   |-- package.json              # Node dependencies
+|   |-- vite.config.js            # Vite bundler configuration
+|   |-- eslint.config.js          # ESLint configuration
 |
+|-- .env                          # Local environment variables
 |-- .env.example                  # Environment variable template
-|-- .gitignore
+|-- .gitignore                    # Tracking exclusions
 |-- run_app.sh                    # Test + launch script
 |-- langgraph.json                # LangGraph Studio config
-|-- pyproject.toml
+|-- pyproject.toml                # Project metadata
 ```
 
 ---
@@ -370,6 +392,8 @@ Five providers run in parallel for every section query:
 
 All providers return a standardized dict with keys: `url`, `title`, `content`, `raw_content`, `domain`, `publish_date`, and `source_type`. This uniform format allows the `ResultMerger` to process results from any provider identically.
 
+The pipeline uses **topic-aware adaptive search routing** to reduce unnecessary API calls and latency (e.g., automatically bypassing ArXiv for strictly non-academic topics based on the query analysis).
+
 ### Result Merger and Ranker (`merger.py`)
 
 After collection, the `ResultMerger` class:
@@ -410,6 +434,10 @@ After a report is generated, the `FollowupChatHandler` in `chat/followup.py`:
    - The chunks are assembled as context for Claude Haiku.
    - The LLM answers strictly based on the retrieved context.
    - The raw source chunks are returned alongside the answer.
+
+### Smart Suggestion Chips
+
+When the chat panel is opened, the UI displays 3 dynamic suggestion chips. These chips are created by a cheap LLM analyzing the generated report. To optimize token usage and latency, the system caches the generated suggestion chips in the Redis Semantic Cache under the original research topic. Subsequent load of the same topic grabs these chips instantly without an LLM call.
 
 ---
 
@@ -645,3 +673,51 @@ The frontend will be available at `http://localhost:5173` and the backend API at
 | ArXiv     | ArXiv public API         | Free, no key     |
 | Wikipedia | MediaWiki OpenSearch API | Free, no key     |
 | NewsAPI   | NewsAPI.org              | API key required |
+
+---
+
+## Deployment Guide
+
+You can deploy this project completely for **free** using Upstash (Redis), Render (Backend), and Vercel (Frontend).
+
+### Step 1: Deploy Semantic Cache (Upstash Redis)
+
+Since Render's free Redis tier drops data and spins down, Upstash is recommended for serverless Redis.
+
+1. Sign up at [Upstash](https://upstash.com/).
+2. Create a new **Redis Database** (Serverless, Free tier).
+3. Scroll down to the connections section and copy the **Redis URL** (it should look like `rediss://default:password@endpoint:port`).
+
+### Step 2: Deploy Backend (Render)
+
+1. Push your code to a GitHub repository.
+2. Sign in to [Render](https://render.com/) and create a new **Web Service**.
+3. Connect your GitHub repository.
+4. Configure the Web Service:
+   - **Name**: `deep-research-backend`
+   - **Root Directory**: `backend`
+   - **Environment**: `Python 3`
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port 10000`
+5. Add your **Environment Variables**:
+   Under the environment variables tab, add every required key from your `.env` file:
+   - `OPENROUTER_API_KEY`: Your OpenRouter Key
+   - `TAVILY_API_KEY`: Your Tavily Key
+   - `REDIS_URL`: The Redis URL you copied from Upstash
+   - _(Add any other required models or keys like Serper/NewsAPI if you are using them)_
+6. Click **Deploy Web Service**. Once the build finishes and the service is live, **copy your Render backend URL** (e.g., `https://deep-research-backend.onrender.com`).
+
+### Step 3: Deploy Frontend (Vercel)
+
+1. Sign in to [Vercel](https://vercel.com/) and click **Add New Project**.
+2. Import the same GitHub repository.
+3. In the Configuration screen:
+   - **Project Name**: `deep-research-agent`
+   - **Framework Preset**: Vercel should auto-detect **Vite**.
+   - **Root Directory**: Click "Edit" and change it to `frontend`.
+4. Open the **Environment Variables** section and add:
+   - **Name**: `VITE_API_URL`
+   - **Value**: Your Render backend URL (e.g., `https://deep-research-backend.onrender.com`) - _Do not add a trailing slash_.
+5. Click **Deploy**. Vercel will install dependencies, build the React app, and deploy it globally.
+
+Once Vercel finishes, open the provided URL. Your Deep Research Agent is now live!

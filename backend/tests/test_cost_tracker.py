@@ -14,19 +14,22 @@ class TestCostTracker:
     def test_track_single_call(self):
         tracker = CostTracker()
         cost = tracker.track_call("mid", input_tokens=1000, output_tokens=500, node_name="write_section")
-        # mid: input = 1000/1000 * 0.0008 = 0.0008, output = 500/1000 * 0.004 = 0.002
-        expected = (1000 / 1000) * 0.0008 + (500 / 1000) * 0.004
+        
+        expected = (1000 / 1000) * MODEL_PRICING["mid"]["input_per_1k"] + (500 / 1000) * MODEL_PRICING["mid"]["output_per_1k"]
         assert abs(cost - expected) < 1e-8
 
-    def test_track_cheap_call_is_free(self):
+    def test_track_cheap_call(self):
         tracker = CostTracker()
         cost = tracker.track_call("cheap", input_tokens=5000, output_tokens=3000)
-        assert cost == 0.0
+        
+        expected = (5000 / 1000) * MODEL_PRICING["cheap"]["input_per_1k"] + (3000 / 1000) * MODEL_PRICING["cheap"]["output_per_1k"]
+        assert abs(cost - expected) < 1e-8
 
     def test_track_premium_call(self):
         tracker = CostTracker()
         cost = tracker.track_call("premium", input_tokens=10000, output_tokens=5000)
-        expected = (10000 / 1000) * 0.003 + (5000 / 1000) * 0.015
+        
+        expected = (10000 / 1000) * MODEL_PRICING["premium"]["input_per_1k"] + (5000 / 1000) * MODEL_PRICING["premium"]["output_per_1k"]
         assert abs(cost - expected) < 1e-8
 
     def test_get_summary_empty(self):
@@ -76,8 +79,10 @@ class TestCostTracker:
     def test_unknown_tier_defaults_to_cheap(self):
         tracker = CostTracker()
         cost = tracker.track_call("unknown_tier", 1000, 500)
-        # Unknown falls back to cheap pricing (free)
-        assert cost == 0.0
+        
+        # Unknown falls back to cheap pricing
+        expected = (1000 / 1000) * MODEL_PRICING["cheap"]["input_per_1k"] + (500 / 1000) * MODEL_PRICING["cheap"]["output_per_1k"]
+        assert abs(cost - expected) < 1e-8
 
 
 class TestStaticEstimate:

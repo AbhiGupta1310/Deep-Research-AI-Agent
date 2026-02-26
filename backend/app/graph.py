@@ -8,11 +8,8 @@ from .nodes import (
     multi_source_search,
     result_merger_ranker,
     write_section,
-    critic_agent,
-    should_reflect,
     parallelize_section_writing,
     aggregator_deduplicator,
-    fact_checker,
     final_synthesis_writer,
 )
 from .output_compiler import output_compiler_node
@@ -24,11 +21,7 @@ def create_section_builder_subagent():
 
     Flow:
         START → query_rewriter_expander → multi_source_search → result_merger_ranker
-              → write_section → critic_agent
-                                    ↓
-                          should_reflect?
-                         ↙              ↘
-       query_rewriter_expander (loop)    END (approved)
+              → write_section → END
     """
     section_builder = StateGraph(SectionState, output=SectionOutputState)
 
@@ -36,22 +29,12 @@ def create_section_builder_subagent():
     section_builder.add_node("multi_source_search", multi_source_search)
     section_builder.add_node("result_merger_ranker", result_merger_ranker)
     section_builder.add_node("write_section", write_section)
-    section_builder.add_node("critic_agent", critic_agent)
 
     section_builder.add_edge(START, "query_rewriter_expander")
     section_builder.add_edge("query_rewriter_expander", "multi_source_search")
     section_builder.add_edge("multi_source_search", "result_merger_ranker")
     section_builder.add_edge("result_merger_ranker", "write_section")
-    section_builder.add_edge("write_section", "critic_agent")
-
-    section_builder.add_conditional_edges(
-        "critic_agent",
-        should_reflect,
-        {
-            "generate_queries": "query_rewriter_expander",
-            "__end__": END,
-        }
-    )
+    section_builder.add_edge("write_section", END)
 
     return section_builder.compile()
 
@@ -66,7 +49,6 @@ def create_reporter_agent():
              → [cache miss] → generate_report_plan
              → [fan-out] section_builder (×N sections in parallel)
              → aggregator_deduplicator
-             → fact_checker
              → final_synthesis_writer (Claude Sonnet — 1 call)
              → output_compiler → END
     """
@@ -78,7 +60,6 @@ def create_reporter_agent():
     builder.add_node("generate_report_plan", generate_report_plan)
     builder.add_node("section_builder_with_web_search", section_builder_subagent)
     builder.add_node("aggregator_deduplicator", aggregator_deduplicator)
-    builder.add_node("fact_checker", fact_checker)
     builder.add_node("final_synthesis_writer", final_synthesis_writer)
     builder.add_node("output_compiler", output_compiler_node)
 
@@ -100,8 +81,7 @@ def create_reporter_agent():
                                   parallelize_section_writing,
                                   ["section_builder_with_web_search"])
     builder.add_edge("section_builder_with_web_search", "aggregator_deduplicator")
-    builder.add_edge("aggregator_deduplicator", "fact_checker")
-    builder.add_edge("fact_checker", "final_synthesis_writer")
+    builder.add_edge("aggregator_deduplicator", "final_synthesis_writer")
     builder.add_edge("final_synthesis_writer", "output_compiler")
     builder.add_edge("output_compiler", END)
 

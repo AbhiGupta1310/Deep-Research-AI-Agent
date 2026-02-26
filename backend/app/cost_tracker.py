@@ -15,19 +15,19 @@ logger = logging.getLogger(__name__)
 # Per-model pricing (USD per 1K tokens) — OpenRouter rates as of 2025
 MODEL_PRICING = {
     "cheap": {
-        "label": "Gemini Flash 2.0",
-        "input_per_1k": 0.0,       # Free tier
-        "output_per_1k": 0.0,
+        "label": "GPT-5 Nano",
+        "input_per_1k": 0.00005,
+        "output_per_1k": 0.0004,
     },
     "mid": {
-        "label": "Claude Haiku 3.5",
-        "input_per_1k": 0.0008,
-        "output_per_1k": 0.004,
+        "label": "Gemini 2.5 Flash",
+        "input_per_1k": 0.0003,
+        "output_per_1k": 0.0025,
     },
     "premium": {
-        "label": "Claude Sonnet 3.5",
-        "input_per_1k": 0.003,
-        "output_per_1k": 0.015,
+        "label": "Gemini 3 Flash Preview",
+        "input_per_1k": 0.0005,
+        "output_per_1k": 0.0030,
     },
 }
 

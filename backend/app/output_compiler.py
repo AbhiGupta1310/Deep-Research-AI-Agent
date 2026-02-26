@@ -48,10 +48,8 @@ class OutputCompiler:
         topic: str,
         sections: list = None,
         sources: list = None,
-        confidence_scores: dict = None,
-        fact_check_flags: list = None,
-        reflection_counts: dict = None,
         start_time: float = None,
+        is_cache_hit: bool = False,
     ) -> Dict[str, Any]:
         """
         Compile the report into all output formats and persist everywhere.
@@ -70,9 +68,7 @@ class OutputCompiler:
         }
 
         # --- 1. Markdown with confidence flags ---
-        md_content = self._inject_confidence_flags(
-            report_content, confidence_scores or {}
-        )
+        md_content = report_content
         md_path = os.path.join(self._output_dir, f"{safe_name}.md")
         self._write_file(md_path, md_content)
         result["markdown_path"] = md_path
@@ -95,9 +91,6 @@ class OutputCompiler:
             content=md_content,
             sections=sections,
             sources=sources,
-            confidence_scores=confidence_scores,
-            fact_check_flags=fact_check_flags,
-            reflection_counts=reflection_counts,
             runtime_seconds=runtime_seconds,
         )
         json_path = os.path.join(self._output_dir, f"{safe_name}.json")
@@ -110,62 +103,26 @@ class OutputCompiler:
         result["chat_enabled"] = await self._embed_to_chromadb(report_id, md_content)
 
         # --- 5. Redis cache for future hits ---
-        await self._store_in_redis(topic, result)
+        if not is_cache_hit:
+            await self._store_in_redis(topic, result)
 
         # --- 6. LangSmith run metadata ---
         self._write_langsmith_metadata(
             report_id=report_id,
             topic=topic,
             runtime_seconds=runtime_seconds,
-            confidence_scores=confidence_scores or {},
-            reflection_counts=reflection_counts or {},
             section_count=len(sections) if sections else 0,
             source_count=len(sources) if sources else 0,
-            fact_flag_count=len(fact_check_flags) if fact_check_flags else 0,
         )
 
         # Attach summary metadata to result
-        result["confidence_scores"] = confidence_scores or {}
         result["source_count"] = len(sources) if sources else 0
         result["runtime_seconds"] = runtime_seconds
 
         logger.info(f"[OutputCompiler] All outputs compiled for '{topic[:50]}' in {runtime_seconds}s")
         return result
 
-    # ------------------------------------------------------------------
-    # Markdown — inject per-section confidence flags
-    # ------------------------------------------------------------------
-    def _inject_confidence_flags(
-        self, content: str, confidence_scores: dict
-    ) -> str:
-        """Prepend confidence badges to section headers in the markdown."""
-        if not confidence_scores:
-            return content
 
-        lines = content.split("\n")
-        output_lines = []
-        for line in lines:
-            # Match ## Section Name headers
-            match = re.match(r"^(#{1,3})\s+(.+)$", line)
-            if match:
-                level, name = match.group(1), match.group(2)
-                # Find matching confidence score (fuzzy match on section name)
-                score = self._find_score(name, confidence_scores)
-                if score is not None:
-                    badge = "✅" if score >= 70 else "⚠️"
-                    line = f"{level} {badge} {name} ({score:.0f}% confidence)"
-            output_lines.append(line)
-
-        return "\n".join(output_lines)
-
-    @staticmethod
-    def _find_score(header_name: str, scores: dict) -> Optional[float]:
-        """Fuzzy-match a header name against confidence score keys."""
-        header_lower = header_name.lower().strip()
-        for key, score in scores.items():
-            if key.lower().strip() in header_lower or header_lower in key.lower().strip():
-                return float(score)
-        return None
 
     # ------------------------------------------------------------------
     # PDF — WeasyPrint (HTML → PDF)
@@ -210,7 +167,8 @@ class OutputCompiler:
             background-color: #f4f4f5;
             padding: 16px;
             border-radius: 8px;
-            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }}
         table {{
             border-collapse: collapse;
@@ -260,9 +218,6 @@ class OutputCompiler:
         content: str,
         sections: list = None,
         sources: list = None,
-        confidence_scores: dict = None,
-        fact_check_flags: list = None,
-        reflection_counts: dict = None,
         runtime_seconds: float = 0.0,
     ) -> dict:
         """Build a structured JSON representation of the report."""
@@ -296,13 +251,9 @@ class OutputCompiler:
             "content": content,
             "sections": serialized_sections,
             "sources": serialized_sources,
-            "confidence_scores": confidence_scores or {},
-            "fact_check_flags": fact_check_flags or [],
-            "reflection_counts": reflection_counts or {},
             "metadata": {
                 "section_count": len(serialized_sections),
                 "source_count": len(serialized_sources),
-                "flagged_claims": len(fact_check_flags) if fact_check_flags else 0,
             },
         }
 
@@ -334,7 +285,6 @@ class OutputCompiler:
             cache_payload = {
                 "content": result.get("markdown_content", ""),
                 "report_id": result.get("report_id", ""),
-                "confidence_scores": result.get("confidence_scores", {}),
                 "json_data": result.get("json_data", {}),
                 "generated_at": result.get("generated_at", ""),
             }
@@ -351,11 +301,8 @@ class OutputCompiler:
         report_id: str,
         topic: str,
         runtime_seconds: float,
-        confidence_scores: dict,
-        reflection_counts: dict,
         section_count: int,
         source_count: int,
-        fact_flag_count: int,
     ) -> None:
         """
         Write LangSmith run metadata. Attempts to tag the active LangSmith
@@ -368,13 +315,6 @@ class OutputCompiler:
             "cost_estimate_usd": self._estimate_cost(section_count),
             "section_count": section_count,
             "source_count": source_count,
-            "flagged_claims": fact_flag_count,
-            "confidence_scores": confidence_scores,
-            "reflection_counts": reflection_counts,
-            "avg_confidence": (
-                round(sum(confidence_scores.values()) / len(confidence_scores), 1)
-                if confidence_scores else 0.0
-            ),
         }
 
         # Try to write to the active LangSmith run
@@ -458,9 +398,6 @@ async def output_compiler_node(state: ReportState) -> dict:
     topic = state.get("topic", "Research Report")
     sections = state.get("sections", [])
     sources = state.get("sources", [])
-    confidence_scores = state.get("confidence_scores", {})
-    fact_check_flags = state.get("fact_check_flags", [])
-    reflection_counts = state.get("reflection_count", {})
 
     logger.info("--- Output Compiler Node ---")
 
@@ -470,10 +407,8 @@ async def output_compiler_node(state: ReportState) -> dict:
         topic=topic,
         sections=sections,
         sources=sources,
-        confidence_scores=confidence_scores,
-        fact_check_flags=fact_check_flags,
-        reflection_counts=reflection_counts,
         start_time=None,  # Runtime tracked per-session in main.py
+        is_cache_hit=state.get("cache_hit", False),
     )
 
     logger.info(f"--- Output Compiler Complete (report_id={report_id}) ---")

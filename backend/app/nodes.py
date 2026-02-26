@@ -1,12 +1,16 @@
 from langchain_openai import ChatOpenAI
 import os
 import asyncio
+import json
+import re
+import uuid
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.constants import Send
 
 from .state import (
     ReportState, SectionState, Section, Sections,
-    Queries, SearchQuery, CriticFeedback
+    Queries, SearchQuery, QueryAnalysisAndHyDE,
+    SearchRoute, SearchRoutes
 )
 from .models import get_cheap_llm, get_mid_llm, get_premium_llm
 from .search import (
@@ -24,9 +28,8 @@ from .prompts import (
     REPORT_SECTION_QUERY_GENERATOR_PROMPT,
     SECTION_WRITER_PROMPT,
     FINAL_SECTION_WRITER_PROMPT,
-    CRITIC_AGENT_PROMPT,
-    QUERY_ANALYZER_PROMPT,
-    HYDE_GENERATOR_PROMPT,
+    QUERY_ANALYZER_AND_HYDE_PROMPT,
+    SEARCH_ROUTER_PROMPT,
 )
 from .cache.redis_cache import SemanticCache
 
@@ -41,9 +44,11 @@ _wikipedia = WikipediaSearchProvider()
 _news = NewsSearchProvider()
 _merger = ResultMerger()
 
-# Max reflection loops per section
-MAX_REFLECTION_LOOPS = 3
 
+import warnings
+
+# Suppress annoying Pydantic V2 serialization warnings from LangChain/OpenRouter
+warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
 
 # ============================================================
 # Node: Query Analyzer + HyDE Generator — v2.0
@@ -72,31 +77,28 @@ async def query_analyzer_hyde(state: ReportState):
             }
     except Exception as e:
         print(f'[Cache] Error checking cache: {e}')
-
-    # Step 2: Analyze query intent
-    query_analysis_prompt = QUERY_ANALYZER_PROMPT.format(topic=topic)
-    query_analysis = get_cheap_llm().invoke([
-        SystemMessage(content=query_analysis_prompt),
-        HumanMessage(content="Analyze this research topic.")
-    ])
-    analysis_text = query_analysis.content
-    print(f'--- Query Analysis Complete ---')
-
-    # Step 3: Generate HyDE document (hypothetical ideal answer)
-    hyde_prompt = HYDE_GENERATOR_PROMPT.format(
-        topic=topic,
-        query_analysis=analysis_text,
-    )
-    hyde_response = get_cheap_llm().invoke([
-        SystemMessage(content=hyde_prompt),
-        HumanMessage(content="Generate the hypothetical ideal answer.")
-    ])
-    hyde_document = hyde_response.content
-    print(f'--- HyDE Document Generated ({len(hyde_document)} chars) ---')
+    
+    # Step 2: Fused Query Analysis and HyDE Generation
+    structured_llm = get_mid_llm().with_structured_output(QueryAnalysisAndHyDE)
+    prompt = QUERY_ANALYZER_AND_HYDE_PROMPT.format(topic=topic)
+    
+    try:
+        result = structured_llm.invoke([
+            SystemMessage(content=prompt),
+            HumanMessage(content="Analyze this research topic and generate the HyDE document.")
+        ])
+        domain = result.domain
+        hyde_document = result.hyde_document
+        print(f'--- Fused Analysis & HyDE Complete ({len(hyde_document)} chars) ---')
+    except Exception as e:
+        print(f"[Query Analyzer] Failed structured output: {e}")
+        domain = ""
+        hyde_document = topic
 
     return {
         "hyde_document": hyde_document,
         "cache_hit": False,
+        "domain": domain,
     }
 
 
@@ -123,10 +125,11 @@ async def generate_report_plan(state: ReportState):
     """Generate the overall plan for building the report."""
 
     topic = state["topic"]
-    print('--- Generating Report Plan ---')
+    depth = state.get("metadata", {}).get("depth", "deep")
+    print(f'--- Generating Report Plan (Depth: {depth}) ---')
 
     report_structure = DEFAULT_REPORT_STRUCTURE
-    number_of_queries = 8
+    number_of_queries = 3
 
     structured_llm = get_cheap_llm().with_structured_output(Queries)
 
@@ -165,14 +168,15 @@ async def generate_report_plan(state: ReportState):
             print("Warning: No search results returned")
             search_context = "No search results available."
         else:
-            ranked = _merger.merge_and_rank(all_results, top_k=10)
+            ranked = await _merger.merge_and_rank(all_results, top_k=10)
             search_context = format_ranked_results(ranked, max_tokens=8000)
 
         # Generate sections
         system_instructions_sections = REPORT_PLAN_SECTION_GENERATOR_PROMPT.format(
             topic=topic,
             report_organization=report_structure,
-            search_context=search_context
+            search_context=search_context,
+            depth=depth
         )
 
         structured_llm = get_cheap_llm().with_structured_output(Sections)
@@ -193,7 +197,7 @@ async def generate_report_plan(state: ReportState):
 # Node: Query Rewriter + Expander (per section) — v2.0
 # ============================================================
 
-def query_rewriter_expander(state: SectionState):
+async def query_rewriter_expander(state: SectionState):
     """
     Generate diverse search queries for a section using HyDE context.
     Generates angle-based variants and selects the best ones.
@@ -203,10 +207,11 @@ def query_rewriter_expander(state: SectionState):
     section = state["section"]
     # Get HyDE document from parent state if available, else use section description
     hyde_context = state.get("hyde_document", section.description) or section.description
+    depth = state.get("depth", "deep")
 
-    print(f'--- Rewriting Queries for Section: {section.name} ---')
+    print(f'--- Rewriting Queries for Section: {section.name} (Depth: {depth}) ---')
 
-    number_of_queries = 5
+    number_of_queries = 1 if depth == "quick" else 2
     structured_llm = get_cheap_llm().with_structured_output(Queries)
 
     system_instructions = REPORT_SECTION_QUERY_GENERATOR_PROMPT.format(
@@ -216,7 +221,7 @@ def query_rewriter_expander(state: SectionState):
     )
 
     user_instruction = "Generate diverse search queries from multiple angles for this section topic."
-    search_queries = structured_llm.invoke([
+    search_queries = await structured_llm.ainvoke([
         SystemMessage(content=system_instructions),
         HumanMessage(content=user_instruction)
     ])
@@ -227,12 +232,12 @@ def query_rewriter_expander(state: SectionState):
 
 
 # ============================================================
-# Node: Multi-Source Search Fanout (per section) — v2.0
+# Node: Multi-Source Search (Adaptive Routing) — v2.0
 # ============================================================
 
 async def multi_source_search(state: SectionState):
     """
-    Fan out search queries to all 5 providers in parallel.
+    Route search queries to specific providers based on domain analysis.
     Collects raw results — ranking is done by the next node (result_merger_ranker).
     """
 
@@ -243,23 +248,67 @@ async def multi_source_search(state: SectionState):
     ]
     section_name = state["section"].name
 
-    print(f'--- Multi-Source Search for "{section_name}" ({len(query_strings)} queries) ---')
+    print(f'--- Adaptive Multi-Source Search for "{section_name}" ({len(query_strings)} queries) ---')
 
-    # Fan out: run all providers in parallel for each query
-    all_results = []
-    for query in query_strings:
-        provider_tasks = [
-            _tavily.search(query, num_results=4),
-            _serper.search(query, num_results=4),
-            _arxiv.search(query, num_results=3),
-            _wikipedia.search(query, num_results=2),
-            _news.search(query, num_results=3),
+    domain = state.get("domain", "").lower()
+    hyde_context = state.get("hyde_document", section_name)
+    depth = state.get("depth", "deep")
+    
+    # 1. Ask LLM to route the queries
+    structured_llm = get_cheap_llm().with_structured_output(SearchRoutes)
+    
+    prompt = SEARCH_ROUTER_PROMPT.format(
+        domain=domain,
+        hyde_context=hyde_context[:2000]
+    )
+    
+    # Send the raw strings attached
+    queries_text = "\n".join([f"- {q}" for q in query_strings])
+    user_msg = f"Determine the best search providers for these queries:\n{queries_text}"
+    
+    try:
+        route_results = structured_llm.invoke([
+            SystemMessage(content=prompt),
+            HumanMessage(content=user_msg)
+        ])
+        routes = route_results.routes
+    except Exception as e:
+        print(f"[MultiSourceSearch] LLM Routing failed ({e}), falling back to default routing")
+        # Fallback: Every query gets Tavily and Wikipedia
+        routes = [
+            SearchRoute(query=q, use_tavily=True, use_wikipedia=True, use_arxiv=False, use_news=False)
+            for q in query_strings
         ]
+
+    # 2. Execute the routed searches
+    all_results = []
+    
+    for route in routes:
+        provider_tasks = []
+        
+        tavily_results = 2 if depth == "quick" else 3
+        
+        if route.use_tavily:
+            provider_tasks.append(_tavily.search(route.query, num_results=tavily_results))
+            
+        if route.use_wikipedia:
+            provider_tasks.append(_wikipedia.search(route.query, num_results=1))
+            
+        if route.use_news:
+            provider_tasks.append(_news.search(route.query, num_results=1 if depth == "quick" else 2))
+            
+        if route.use_arxiv:
+            provider_tasks.append(_arxiv.search(route.query, num_results=1))
+            
+        # Fallback if LLM predicted NO providers:
+        if not provider_tasks:
+            provider_tasks.append(_tavily.search(route.query, num_results=2))
+            
         results = await asyncio.gather(*provider_tasks, return_exceptions=True)
 
         for result in results:
             if isinstance(result, Exception):
-                print(f'[MultiSourceSearch] Provider error: {result}')
+                print(f'[MultiSourceSearch] Provider error for query "{route.query}": {result}')
                 continue
             if isinstance(result, list):
                 all_results.extend(result)
@@ -283,7 +332,7 @@ async def multi_source_search(state: SectionState):
 # Node: Result Merger + Ranker (per section) — v2.0
 # ============================================================
 
-def result_merger_ranker(state: SectionState):
+async def result_merger_ranker(state: SectionState):
     """
     Merge, deduplicate, and rank search results by credibility.
     Converts raw search results into formatted source context for the writer.
@@ -299,14 +348,14 @@ def result_merger_ranker(state: SectionState):
         return {"source_str": "No search results available.", "search_results": []}
 
     # Merge, deduplicate, and rank using the ResultMerger
-    ranked_sources = _merger.merge_and_rank(
+    ranked_sources = await _merger.merge_and_rank(
         raw_results,
         hyde_document=state["section"].description,
-        top_k=15,
+        top_k=10,
     )
 
     # Format for LLM context
-    source_str = format_ranked_results(ranked_sources, max_tokens=15000)
+    source_str = format_ranked_results(ranked_sources, max_tokens=12000)
 
     # Convert to dicts for state storage
     search_results_dicts = [s.to_dict() for s in ranked_sources]
@@ -323,7 +372,7 @@ def result_merger_ranker(state: SectionState):
 # Node: Write Section (per section)
 # ============================================================
 
-def write_section(state: SectionState):
+async def write_section(state: SectionState):
     """Write a section of the report using the mid-tier LLM."""
 
     section = state["section"]
@@ -337,8 +386,12 @@ def write_section(state: SectionState):
         context=source_str
     )
 
+    writer_llm = get_mid_llm().bind(
+        presence_penalty=0.1,
+    )
+
     user_instruction = "Generate a report section based on the provided sources."
-    section_content = get_mid_llm().invoke([
+    section_content = await writer_llm.ainvoke([
         SystemMessage(content=system_instructions),
         HumanMessage(content=user_instruction)
     ])
@@ -347,103 +400,15 @@ def write_section(state: SectionState):
 
     print(f'--- Writing Section: {section.name} Completed ---')
 
-    return {"completed_sections": [section]}
+    sources = state.get("search_results", [])
+    
+    return {
+        "completed_sections": [section],
+        "sources": sources
+    }
 
 
-# ============================================================
-# Node: Critic Agent (per section) — NEW in v2.0
-# ============================================================
 
-def critic_agent(state: SectionState):
-    """
-    Evaluate a section draft for quality, gaps, and issues.
-
-    Uses cheap LLM (Gemini Flash) to assess:
-    - Knowledge gaps
-    - Unsupported claims
-    - Outdated data (>12 months)
-    - Source contradictions
-
-    Returns CriticFeedback and updates state.
-    """
-
-    section = state["section"]
-    source_str = state.get("source_str", "")
-    current_count = state.get("reflection_count", 0)
-
-    print(f'--- Critic Agent Evaluating Section: {section.name} (loop {current_count + 1}/{MAX_REFLECTION_LOOPS}) ---')
-
-    structured_llm = get_cheap_llm().with_structured_output(CriticFeedback)
-
-    system_instructions = CRITIC_AGENT_PROMPT.format(
-        section_title=section.name,
-        section_content=section.content,
-        source_material=source_str[:8000],  # Truncate to avoid token limits
-    )
-
-    try:
-        feedback = structured_llm.invoke([
-            SystemMessage(content=system_instructions),
-            HumanMessage(content="Evaluate this section and provide structured feedback.")
-        ])
-
-        print(f'--- Critic Agent Result for "{section.name}": '
-              f'gaps_found={feedback.gaps_found}, '
-              f'confidence={feedback.confidence_score:.0f}%, '
-              f'gaps={len(feedback.knowledge_gaps)}, '
-              f'unsupported={len(feedback.unsupported_claims)} ---')
-
-        return {
-            "critic_feedback": feedback,
-            "knowledge_gaps": feedback.knowledge_gaps,
-            "confidence_score": feedback.confidence_score,
-            "reflection_count": current_count + 1,
-        }
-
-    except Exception as e:
-        print(f"Error in critic_agent for '{section.name}': {e}")
-        # On error, approve the section as-is
-        return {
-            "critic_feedback": CriticFeedback(
-                gaps_found=False,
-                confidence_score=50.0,
-            ),
-            "knowledge_gaps": [],
-            "confidence_score": 50.0,
-            "reflection_count": current_count + 1,
-        }
-
-
-# ============================================================
-# Conditional Edge: Should Reflect? — NEW in v2.0
-# ============================================================
-
-def should_reflect(state: SectionState) -> str:
-    """
-    Decide whether to loop back for more research or approve the section.
-
-    Routes to:
-    - "generate_queries" if gaps found AND reflection_count < MAX
-    - "__end__" if section is approved or max loops reached
-    """
-
-    feedback = state.get("critic_feedback")
-    current_count = state.get("reflection_count", 0)
-
-    if feedback is None:
-        return "__end__"
-
-    if feedback.gaps_found and current_count < MAX_REFLECTION_LOOPS:
-        section_name = state["section"].name
-        print(f'--- Reflection Loop: Re-searching for "{section_name}" '
-              f'(loop {current_count}/{MAX_REFLECTION_LOOPS}) ---')
-        return "generate_queries"
-
-    # Approved or max loops reached
-    section_name = state["section"].name
-    print(f'--- Section Approved: "{section_name}" '
-          f'(confidence: {feedback.confidence_score:.0f}%, loops: {current_count}) ---')
-    return "__end__"
 
 
 # ============================================================
@@ -454,10 +419,12 @@ def parallelize_section_writing(state: ReportState):
     """Fan-out: kick off section builders in parallel for research sections."""
 
     hyde_doc = state.get("hyde_document", "")
+    domain = state.get("domain", "")
+    depth = state.get("metadata", {}).get("depth", "deep")
 
     return [
         Send("section_builder_with_web_search",
-             {"section": s, "reflection_count": 0, "hyde_document": hyde_doc})
+             {"section": s, "hyde_document": hyde_doc, "domain": domain, "depth": depth})
         for s in state["sections"]
         if s.research
     ]
@@ -530,86 +497,19 @@ def aggregator_deduplicator(state: ReportState):
     }
 
 
-# ============================================================
-# Node: Fact Checker — v2.0
-# ============================================================
 
-def fact_checker(state: ReportState):
-    """
-    Cross-reference factual claims across all completed sections.
-
-    - Claims supported by 1 source only → flag as ⚠️ LOW CONFIDENCE
-    - Claims corroborated by 3+ sources → mark as ✅ HIGH CONFIDENCE
-    - Outputs per-section confidence scores and fact_check_flags.
-    """
-
-    report_content = state.get("report_sections_from_research", "")
-    if not report_content:
-        print("--- Fact Checker: No content to check, skipping ---")
-        return {}
-
-    print("--- Fact Checker: Cross-referencing claims ---")
-
-    from .prompts import FACT_CHECKER_PROMPT
-
-    system_instructions = FACT_CHECKER_PROMPT.format(
-        report_content=report_content[:12000],  # Truncate for token limits
-    )
-
-    try:
-        response = get_cheap_llm().invoke([
-            SystemMessage(content=system_instructions),
-            HumanMessage(content="Fact-check this report and return structured JSON feedback.")
-        ])
-
-        # Parse the JSON response
-        response_text = response.content
-        # Extract JSON from the response (handle markdown code blocks)
-        import re
-        json_match = re.search(r'\{[\s\S]*\}', response_text)
-        if json_match:
-            import json
-            fact_check_result = json.loads(json_match.group())
-        else:
-            fact_check_result = {}
-
-        # Extract results
-        flagged_claims = fact_check_result.get("flagged_claims", [])
-        section_scores = fact_check_result.get("section_scores", {})
-        overall_confidence = fact_check_result.get("overall_confidence", 50)
-
-        # Format fact check flags
-        fact_flags = []
-        for claim in flagged_claims:
-            flag = f"[{claim.get('confidence', 'UNKNOWN')}] {claim.get('section', '?')}: {claim.get('claim', '?')} ({claim.get('issue', '?')})"
-            fact_flags.append(flag)
-
-        print(f"--- Fact Checker Complete: {len(flagged_claims)} flags, "
-              f"overall confidence: {overall_confidence}% ---")
-
-        return {
-            "fact_check_flags": fact_flags,
-            "confidence_scores": section_scores,
-        }
-
-    except Exception as e:
-        print(f"Error in fact_checker: {e}")
-        return {
-            "fact_check_flags": [],
-            "confidence_scores": {},
-        }
 
 
 # ============================================================
 # Node: Final Synthesis Writer — v2.0 (Premium LLM)
 # ============================================================
 
-def final_synthesis_writer(state: ReportState):
+async def final_synthesis_writer(state: ReportState):
     """
     The ONE premium LLM call. Uses Claude Sonnet 3.5 to synthesize
     all research sections into a cohesive, polished final report.
 
-    Receives: approved sections, confidence scores, fact-check flags.
+    Receives: approved sections, aggregated research context.
     Writes: Executive Summary, Introduction, full narrative, Conclusion.
     Replaces: write_final_sections + compile_final_report.
     """
@@ -617,8 +517,6 @@ def final_synthesis_writer(state: ReportState):
     sections = state["sections"]
     completed_sections = {s.name: s.content for s in state.get("completed_sections", [])}
     report_content = state.get("report_sections_from_research", "")
-    confidence_scores = state.get("confidence_scores", {})
-    fact_check_flags = state.get("fact_check_flags", [])
 
     print("--- Final Synthesis Writer (Premium LLM) ---")
 
@@ -632,17 +530,6 @@ def final_synthesis_writer(state: ReportState):
         else:
             non_research_sections.append(section)
 
-    # Format fact check context
-    fact_check_context = ""
-    if fact_check_flags:
-        fact_check_context = "\n\nFact-Check Flags:\n" + "\n".join(f"- {f}" for f in fact_check_flags[:10])
-
-    confidence_context = ""
-    if confidence_scores:
-        confidence_context = "\n\nPer-Section Confidence Scores:\n"
-        for name, score in confidence_scores.items():
-            confidence_context += f"- {name}: {score}%\n"
-
     # Build the synthesis prompt
     from .prompts import FINAL_SYNTHESIS_PROMPT
 
@@ -654,13 +541,11 @@ def final_synthesis_writer(state: ReportState):
     system_instructions = FINAL_SYNTHESIS_PROMPT.format(
         topic=topic,
         research_sections=all_research_content[:80000],
-        non_research_section_names=", ".join(non_research_names),
-        fact_check_context=fact_check_context,
-        confidence_context=confidence_context,
+        non_research_section_names=", ".join(non_research_names)
     )
 
     try:
-        response = get_premium_llm().invoke([
+        response = await get_premium_llm().ainvoke([
             SystemMessage(content=system_instructions),
             HumanMessage(content="Synthesize the complete final report.")
         ])
@@ -668,9 +553,10 @@ def final_synthesis_writer(state: ReportState):
         final_report = response.content
 
         # Escape unescaped $ symbols for Markdown rendering
-        final_report = final_report.replace("\\$", "TEMP_PLACEHOLDER")
+        sentinel = str(uuid.uuid4())
+        final_report = final_report.replace("\\$", sentinel)
         final_report = final_report.replace("$", "\\$")
-        final_report = final_report.replace("TEMP_PLACEHOLDER", "\\$")
+        final_report = final_report.replace(sentinel, "\\$")
 
         print(f"--- Final Synthesis Complete ({len(final_report)} chars) ---")
 

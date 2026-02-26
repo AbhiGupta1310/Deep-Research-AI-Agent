@@ -47,6 +47,10 @@ The report should follow this organizational structure:
 You should reflect on this additional context information from web searches to plan the main sections of the report:
 {search_context}
 
+Based on the requested depth "{depth}", you MUST strictly generate the following number of MAIN SECTIONS (excluding introduction and conclusion):
+- If depth is "quick": Generate 3 to 4 sections.
+- If depth is "deep": Generate 5 to 6 sections.
+
 Now, generate the sections of the report. Each section should have the following fields:
 - Name - Name for this section of the report.
 - Description - Brief overview of the main topics and concepts to be covered in this section.
@@ -73,6 +77,7 @@ When generating {number_of_queries} search queries, ensure diversity by covering
 5. **Recent/Trends**: Queries targeting recent developments (include current year markers)
 
 Your queries should be:
+- EXTREMELY concise (under 8-10 words). For academic sources (like Arxiv), strictly use keyword combinations (e.g., "MLOps pipeline architecture benchmark") instead of natural language sentences.
 - Specific enough to avoid generic results
 - Technical enough to capture detailed information
 - Diverse enough to cover the section from multiple angles
@@ -96,7 +101,7 @@ Guidelines for writing:
 - Use technical terminology precisely
 
 2. Length and Style:
-- Strict 150-200 word limit
+- Aim for 250-300 words
 - No marketing language
 - Technical focus
 - Write in simple, clear language do not use complex words unnecessarily
@@ -125,16 +130,35 @@ Guidelines for writing:
 5. Use this source material obtained from web searches to help write the section:
 {context}
 
-6. Quality Checks:
+6. Quality Checks & Anti-Fluff Rules:
 - Format should be Markdown
-- Exactly 150-200 words (excluding title and sources)
+- Approximately 250-300 words (excluding title and sources)
 - Careful use of only ONE structural element (table or bullet list) and only if it helps clarify your point
 - One specific example / case study if available
 - Starts with bold insight
-- No preamble prior to creating the section content
+- STRICTLY NO fluff or filler phrases (e.g., do NOT use "In today's rapidly evolving landscape", "It is important to note", or "As we can see"). Be completely direct and information-dense.
+- No preamble prior to creating the section content. Start immediately with the section title.
 - Sources cited at end
 - If there are special characters in the text, such as the dollar symbol,
   ensure they are escaped properly for correct rendering e.g $25.5 should become \\$25.5
+
+7. Few-Shot Example of Excellent Section Writing:
+## Cost Optimization Strategies
+**Utilizing spot instances can reduce cloud compute expenses by up to 90% compared to on-demand pricing, though it requires robust fault-tolerance mechanisms.** Companies like TechCorp implemented a mixed-instance strategy in 2023, combining 70% spot instances with 30% reserved instances across their multi-region AWS deployment. This approach led to an immediate $1.2M reduction in their annual infrastructure spend while maintaining 99.99% uptime. 
+
+When designing for volatile compute, teams must containerize applications using Kubernetes and leverage tools like Karpenter for rapid node provisioning. Stateful workloads should be separated and placed on consistent infrastructure or dedicated databases to prevent data loss during interruptions.
+
+| Strategy | Cost Reduction | Complexity | Best For |
+|---|---|---|---|
+| Spot Instances | 70-90% | High | Stateless, batch processing |
+| Reserved Instances | 30-60% | Low | Baseline database workloads |
+| Rightsizing | 10-20% | Medium | All steady-state applications |
+
+By strictly decoupling storage from compute, organizations can aggressively scale transient instances without risking core data availability.
+
+### Sources
+- AWS Spot Instance Pricing Model : https://aws.amazon.com/ec2/spot/pricing/
+- TechCorp 2023 Infrastructure Report : https://techcorp.com/reports/infra-2023
 """
 
 FINAL_SECTION_WRITER_PROMPT = """You are an expert technical writer crafting a section that synthesizes information from the rest of the report.
@@ -190,124 +214,32 @@ For Introduction:
   ensure they are escaped properly for correct rendering e.g $25.5 should become \\$25.5"""
 
 # ============================================================
-# v2.0 — Critic Agent Prompt
-# ============================================================
-
-CRITIC_AGENT_PROMPT = """You are a critical evaluator and research quality analyst. Your job is to assess a drafted report section and identify any weaknesses.
-
-Section Title:
-{section_title}
-
-Section Content (Draft):
-{section_content}
-
-Source Material Used:
-{source_material}
-
-Evaluate the section on these criteria:
-
-1. **Knowledge Gaps**: Are there important aspects of the topic that are NOT covered? Are there obvious questions a reader would have that remain unanswered?
-
-2. **Unsupported Claims**: Are there any factual claims, statistics, or assertions that are NOT backed by the provided source material? Flag any claim that appears to be fabricated or unverifiable.
-
-3. **Outdated Data**: Are there any data points, statistics, or references that appear to be more than 12 months old? Flag anything that may no longer be current.
-
-4. **Source Contradictions**: Do any sources contradict each other? Are there conflicting data points or perspectives that are not addressed?
-
-5. **Confidence Score**: Rate your overall confidence in this section's quality from 0 to 100:
-   - 90-100: Excellent — well-sourced, comprehensive, no gaps
-   - 70-89: Good — minor gaps, mostly well-supported
-   - 50-69: Fair — some notable gaps or unsupported claims
-   - 30-49: Poor — significant gaps, needs major revision
-   - 0-29: Very Poor — mostly unsupported or incorrect
-
-6. **Suggested Queries**: If gaps are found, suggest 2-3 targeted search queries that would help fill those specific gaps.
-
-Set `gaps_found` to true if you identify ANY of the following:
-- 2+ knowledge gaps
-- 1+ unsupported claims
-- 1+ outdated data points
-- 1+ contradictions
-
-Be rigorous but fair. The goal is to improve quality through targeted re-research, not to be overly critical of well-written sections."""
-
-# ============================================================
 # v2.0 — Query Analyzer + HyDE Prompts
 # ============================================================
 
-QUERY_ANALYZER_PROMPT = """You are an expert research query analyst. Analyze the user's research topic and extract structured intent.
+QUERY_ANALYZER_AND_HYDE_PROMPT = """You are an expert research query analyst and generator. Analyze the user's research topic, extract structured intent, and generate a hypothetical "ideal answer" (HyDE document).
 
 User's Topic:
 {topic}
 
-Provide your analysis:
-1. **Core Intent**: What is the user actually trying to learn or accomplish?
-2. **Scope**: Is this a broad survey, a focused deep-dive, or a comparison?
-3. **Domain**: What field(s) does this topic belong to? (e.g., technology, science, business, history)
-4. **Output Format**: What type of report would best serve this query? (e.g., technical report, comparative analysis, tutorial, overview)
-5. **Key Entities**: List the main concepts, technologies, or subjects involved.
-6. **Time Sensitivity**: Is recent information critical, or is historical context more important?
+Phase 1: Analysis
+Analyze the query and provide the following for the structured output:
+1. "intent": What is the user actually trying to learn or accomplish?
+2. "scope": Is this a broad survey, a focused deep-dive, or a comparison?
+3. "domain": What field(s) does this topic belong to? (e.g., technology, science, business, history, news)
+4. "output_format": What type of report would best serve this query?
+5. "entities": List the main concepts, technologies, or subjects involved (comma-separated string).
+6. "time_sensitivity": Is recent information critical, or is historical context more important?
 
-Return your analysis as a concise structured summary."""
-
-HYDE_GENERATOR_PROMPT = """You are an expert researcher. Given a research topic, generate a hypothetical "ideal answer" — a well-structured, information-rich response that represents what a perfect research report on this topic would look like.
-
-Research Topic:
-{topic}
-
-Query Analysis:
-{query_analysis}
-
-Generate a 200-300 word hypothetical ideal answer that:
+Phase 2: HyDE Generation
+Generate a 200-300 word hypothetical ideal answer ("hyde_document") that:
 1. Covers the key aspects a comprehensive report should address
 2. Includes plausible (but hypothetical) statistics, data points, and examples
 3. Mentions specific technologies, methodologies, or frameworks likely relevant
 4. References the types of sources that would be authoritative for this topic
 5. Uses the same vocabulary and terminology the best sources would use
 
-IMPORTANT: This is NOT a real answer — it's a "search anchor" to help find the best real sources. Make it information-dense with specific terms that would appear in high-quality search results.
-
-Do NOT include disclaimers about this being hypothetical. Write it as if it were a real expert summary."""
-
-# ============================================================
-# v2.0 — Fact Checker Prompt
-# ============================================================
-
-FACT_CHECKER_PROMPT = """You are a rigorous fact-checker reviewing a compiled research report. Your job is to cross-reference claims against the source material and flag issues.
-
-Report Sections:
-{report_content}
-
-Instructions:
-
-1. **Identify Key Claims**: Extract the most important factual claims, statistics, and assertions from each section.
-
-2. **Cross-Reference**: For each claim, check:
-   - Is it supported by the source material cited in the section?
-   - Is it corroborated by multiple sources or only one?
-   - Does it contradict any other claim in the report?
-
-3. **Flag Issues**: For each problematic claim, provide:
-   - The claim text
-   - The section it appears in
-   - The issue type: UNSUPPORTED, SINGLE_SOURCE, CONTRADICTED, or OUTDATED
-   - A confidence level: LOW (⚠️), MEDIUM, or HIGH (✅)
-
-4. **Per-Section Confidence**: Rate each section's factual reliability from 0 to 100.
-
-5. **Overall Assessment**: Provide a brief summary of the report's factual quality.
-
-Return your response as a JSON object with this structure:
-{{
-  "flagged_claims": [
-    {{"claim": "...", "section": "...", "issue": "...", "confidence": "LOW"}}
-  ],
-  "section_scores": {{
-    "Section Name": 75
-  }},
-  "overall_summary": "...",
-  "overall_confidence": 80
-}}"""
+IMPORTANT: The HyDE generation is NOT a real answer — it's a "search anchor" to help find the best real sources. Make it information-dense with specific terms that would appear in high-quality search results. Do NOT include disclaimers about this being hypothetical. Write it as if it were a real expert summary."""
 
 # ============================================================
 # v2.0 — Final Synthesis Prompt (Premium LLM)
@@ -321,8 +253,6 @@ Researched Sections:
 {research_sections}
 
 Sections you need to write from scratch (using the researched content as context): {non_research_section_names}
-{fact_check_context}
-{confidence_context}
 
 Your task:
 
@@ -347,9 +277,28 @@ Your task:
 5. **Quality Standards**:
    - Professional, technical tone
    - No marketing language
-   - If fact-check flags were provided, acknowledge any limitations
-   - Ensure all $ symbols are escaped as \\$ for Markdown rendering
+   - STRICTLY retain original currencies (e.g., INR, ₹, €, £). Do NOT convert or hallucinate USD ($) if the sources mention other currencies.
    - Use proper Markdown formatting throughout
-   - Include a Sources section at the very end compiling all cited sources
+   - Include a Sources section at the very end compiling all cited sources. You MUST format each source as a clickable Markdown link using the format: `- [Title](URL)`. Do not just list the titles.
 
 The final output should be a complete, publication-ready Markdown document."""
+
+# ============================================================
+# v2.0 — Adaptive Search Router Prompt
+# ============================================================
+
+SEARCH_ROUTER_PROMPT = """You are an expert search strategist. Your job is to analyze a list of search queries and determine which search providers are most appropriate to fulfill each query.
+
+Report Domain: {domain}
+Section Context (HyDE): {hyde_context}
+
+For each query, you must decide which of the available search providers to use. 
+It is crucial to SAVE API COSTS and LATENCY by ONLY selecting the providers that are highly likely to contain the best information for that specific query. DO NOT just select all providers for every query.
+
+Available Providers and when to use them:
+- use_tavily (General Web): Use for broad topics, company information, tutorials, opinions, and unstructured data not found elsewhere.
+- use_wikipedia (Wiki): Use for foundational concepts, history, established facts, and general overviews.
+- use_arxiv (Academic): Use strictly for academic/scientific research, computer science, mathematics, physics, or deep technical papers. Do NOT use for general news or basic tutorials.
+- use_news (News): Use strictly for current events, politics, market updates, or things that happened very recently.
+
+You must output a list of routes that corresponds exactly to the provided queries."""
