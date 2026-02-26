@@ -18,8 +18,8 @@ except ImportError:
 
 
 # Tune these two values based on your embedding model
-CONTEXT_THRESHOLD = 0.65   # chunk is a direct answer source
-DOMAIN_THRESHOLD  = 0.85   # chunk is in the same subject area but not a direct answer
+CONTEXT_THRESHOLD = 0.65  # chunk is a direct answer source
+DOMAIN_THRESHOLD = 0.85  # chunk is in the same subject area but not a direct answer
 
 
 class FollowupChatHandler:
@@ -40,20 +40,22 @@ class FollowupChatHandler:
             if chromadb is None:
                 print("[FollowupChat] chromadb package not installed. Chat disabled.")
                 return None
-            
+
             # Old Code:
             # self._chroma_client = chromadb.Client()
-            
+
             # New Code: Use PersistentClient so data survives server restarts
             import os
+
             db_path = os.path.join(os.path.dirname(__file__), "..", "chroma_data")
             self._chroma_client = chromadb.PersistentClient(path=db_path)
-            
+
         return self._chroma_client
 
     async def embed_report(self, report_id: str, report_content: str) -> bool:
         """
         Chunk and embed a report into a ChromaDB collection.
+        Memory-optimized: limits chunks to prevent OOM.
 
         Args:
             report_id: Unique identifier for the report/research session.
@@ -73,6 +75,16 @@ class FollowupChatHandler:
             )
 
             chunks = self._chunk_report(report_content)
+
+            # Memory optimization: Cap chunks to prevent OOM
+            # ChromaDB can handle ~500 chunks on 512MB RAM
+            MAX_CHUNKS = 500
+            if len(chunks) > MAX_CHUNKS:
+                print(
+                    f"[FollowupChat] Report has {len(chunks)} chunks, capping at {MAX_CHUNKS}"
+                )
+                chunks = chunks[:MAX_CHUNKS]
+
             if not chunks:
                 return False
 
@@ -83,7 +95,9 @@ class FollowupChatHandler:
                 metadatas=[{"chunk_index": i} for i in range(len(chunks))],
             )
 
-            print(f"[FollowupChat] Embedded {len(chunks)} chunks for report {report_id}")
+            print(
+                f"[FollowupChat] Embedded {len(chunks)} chunks for report {report_id}"
+            )
             return True
 
         except Exception as e:
@@ -125,7 +139,7 @@ class FollowupChatHandler:
             )
 
             retrieved_chunks: List[str] = results.get("documents", [[]])[0]
-            distances: List[float]      = results.get("distances",  [[]])[0]
+            distances: List[float] = results.get("distances", [[]])[0]
 
             best_distance = min(distances) if distances else 1.0
 
@@ -169,16 +183,20 @@ class FollowupChatHandler:
 
         context = "\n\n---\n\n".join(chunks)
 
-        response = llm.invoke([
-            SystemMessage(content=(
-                "You are a helpful research assistant. "
-                "Answer the user's question based ONLY on the following context "
-                "from a research report. Be concise and accurate. "
-                "If the context does not fully cover the question, say so.\n\n"
-                f"Context:\n{context}"
-            )),
-            HumanMessage(content=question),
-        ])
+        response = llm.invoke(
+            [
+                SystemMessage(
+                    content=(
+                        "You are a helpful research assistant. "
+                        "Answer the user's question based ONLY on the following context "
+                        "from a research report. Be concise and accurate. "
+                        "If the context does not fully cover the question, say so.\n\n"
+                        f"Context:\n{context}"
+                    )
+                ),
+                HumanMessage(content=question),
+            ]
+        )
 
         return self._make_response(response.content, chunks, "context")
 
@@ -193,15 +211,19 @@ class FollowupChatHandler:
         """
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        response = llm.invoke([
-            SystemMessage(content=(
-                "You are a helpful research assistant. "
-                "The user's question is related to the report's subject area "
-                "but was not covered in the report itself. "
-                "Answer from your general knowledge. Be concise and accurate."
-            )),
-            HumanMessage(content=question),
-        ])
+        response = llm.invoke(
+            [
+                SystemMessage(
+                    content=(
+                        "You are a helpful research assistant. "
+                        "The user's question is related to the report's subject area "
+                        "but was not covered in the report itself. "
+                        "Answer from your general knowledge. Be concise and accurate."
+                    )
+                ),
+                HumanMessage(content=question),
+            ]
+        )
 
         notice = (
             "> ⚠️ **Not found in the report** — answering from general knowledge.\n\n"
@@ -212,13 +234,16 @@ class FollowupChatHandler:
     def _chunk_report(
         self,
         content: str,
-        chunk_size: int = 600,
-        overlap: int = 120,
+        chunk_size: int = 800,  # Increased from 600 to reduce chunk count
+        overlap: int = 150,  # Increased from 120 for better context
     ) -> List[str]:
-        """Sliding window chunking with overlap."""
-        text   = content.replace("\r", "")
+        """
+        Sliding window chunking with overlap.
+        Optimized: larger chunks = fewer total chunks = less memory.
+        """
+        text = content.replace("\r", "")
         chunks = []
-        start  = 0
+        start = 0
         length = len(text)
 
         while start < length:
