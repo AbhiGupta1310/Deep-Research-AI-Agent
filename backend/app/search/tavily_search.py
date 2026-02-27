@@ -16,6 +16,9 @@ class TavilySearchProvider:
 
     def _get_client(self) -> TavilySearchAPIWrapper:
         if self._client is None:
+            import os
+            if not os.getenv("TAVILY_API_KEY"):
+                raise ValueError("TAVILY_API_KEY environment variable is not set. Tavily search requires a valid API key.")
             self._client = TavilySearchAPIWrapper()
         return self._client
 
@@ -35,9 +38,9 @@ class TavilySearchProvider:
             raw_results = await self._get_client().raw_results_async(
                 query=query,
                 max_results=num_results,
-                search_depth="advanced",
+                search_depth="basic",
                 include_answer=False,
-                include_raw_content=True,
+                include_raw_content=False,
             )
 
             results = []
@@ -47,7 +50,7 @@ class TavilySearchProvider:
                     "url": url,
                     "title": item.get("title", "Untitled"),
                     "content": item.get("content", ""),
-                    "raw_content": item.get("raw_content", ""),
+                    "raw_content": "",
                     "domain": self._extract_domain(url),
                     "publish_date": item.get("published_date", ""),
                     "source_type": "tavily",

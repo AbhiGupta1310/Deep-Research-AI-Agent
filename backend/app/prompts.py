@@ -233,11 +233,12 @@ Analyze the query and provide the following for the structured output:
 
 Phase 2: HyDE Generation
 Generate a 200-300 word hypothetical ideal answer ("hyde_document") that:
-1. Covers the key aspects a comprehensive report should address
-2. Includes plausible (but hypothetical) statistics, data points, and examples
-3. Mentions specific technologies, methodologies, or frameworks likely relevant
-4. References the types of sources that would be authoritative for this topic
-5. Uses the same vocabulary and terminology the best sources would use
+1. Covers the key aspects a comprehensive report should address.
+2. **Entity vs. Concept Check**: If the topic refers to a specific COMPANY or BUSINESS ENTITY (e.g., "Emergent AI Company"), focus on its business model, product strategy, market positioning, and direct competitors. DO NOT descend into broad theoretical or philosophical discussions (e.g., the nature of emergence) unless explicitly requested.
+3. Includes plausible (but hypothetical) statistics, data points, and examples.
+4. Mentions specific technologies, methodologies, or frameworks likely relevant.
+5. References the types of sources that would be authoritative for this topic.
+6. Uses the same vocabulary and terminology the best sources would use.
 
 IMPORTANT: The HyDE generation is NOT a real answer — it's a "search anchor" to help find the best real sources. Make it information-dense with specific terms that would appear in high-quality search results. Do NOT include disclaimers about this being hypothetical. Write it as if it were a real expert summary."""
 
@@ -296,9 +297,9 @@ For each query, you must decide which of the available search providers to use.
 It is crucial to SAVE API COSTS and LATENCY by ONLY selecting the providers that are highly likely to contain the best information for that specific query. DO NOT just select all providers for every query.
 
 Available Providers and when to use them:
-- use_tavily (General Web): Use for broad topics, company information, tutorials, opinions, and unstructured data not found elsewhere.
+- use_tavily (General Web): Use for broad topics, company information, startups, product research, tutorials, and business landscape analysis. For specific COMPANY ENTITIES, this is the PRIMARY provider.
 - use_wikipedia (Wiki): Use for foundational concepts, history, established facts, and general overviews.
-- use_arxiv (Academic): Use strictly for academic/scientific research, computer science, mathematics, physics, or deep technical papers. Do NOT use for general news or basic tutorials.
-- use_news (News): Use strictly for current events, politics, market updates, or things that happened very recently.
+- use_arxiv (Academic): Use strictly for academic/scientific research, computer science, mathematics, physics, or deep technical papers. Do NOT use for general news, startup research, or basic tutorials.
+- use_news (News): Use strictly for current events, politics, industry news releases, or things that happened very recently.
 
 You must output a list of routes that corresponds exactly to the provided queries."""

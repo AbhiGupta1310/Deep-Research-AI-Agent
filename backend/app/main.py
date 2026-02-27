@@ -136,7 +136,7 @@ async def conduct_research(request: ResearchRequest):
 
                 # Run the graph and emit progress events
                 async for event in reporter_agent.astream(
-                    {"topic": topic, "metadata": {"topic": topic, "depth": depth}},
+                    {"topic": topic, "depth": depth},
                     config={
                         "recursion_limit": 50,
                         "metadata": {"topic": topic, "depth": depth},

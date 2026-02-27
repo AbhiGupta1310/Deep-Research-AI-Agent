@@ -14,6 +14,7 @@ import os
 import re
 import json
 import time
+import asyncio
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -75,9 +76,9 @@ class OutputCompiler:
         result["markdown_filename"] = f"{safe_name}.md"
         result["markdown_content"] = md_content
 
-        # --- 2. PDF via WeasyPrint ---
+        # --- 2. PDF via WeasyPrint (P6: offloaded to thread pool — non-blocking) ---
         pdf_path = os.path.join(self._output_dir, f"{safe_name}.pdf")
-        pdf_ok = self._generate_pdf(md_content, pdf_path)
+        pdf_ok = await asyncio.to_thread(self._generate_pdf, md_content, pdf_path)
         if pdf_ok:
             result["pdf_path"] = pdf_path
             result["pdf_filename"] = f"{safe_name}.pdf"
@@ -99,8 +100,10 @@ class OutputCompiler:
         result["json_filename"] = f"{safe_name}.json"
         result["json_data"] = json_data
 
-        # --- 4. ChromaDB mini store for follow-up chat ---
-        result["chat_enabled"] = await self._embed_to_chromadb(report_id, md_content)
+        # --- 4. ChromaDB mini store for follow-up chat (P5: fire-and-forget background task) ---
+        # The user gets the report immediately; ChromaDB embedding runs in the background.
+        asyncio.create_task(self._embed_to_chromadb(report_id, md_content))
+        result["chat_enabled"] = True  # optimistically true — will be ready within seconds
 
         # --- 5. Redis cache for future hits ---
         if not is_cache_hit:
@@ -128,7 +131,7 @@ class OutputCompiler:
     # PDF — WeasyPrint (HTML → PDF)
     # ------------------------------------------------------------------
     def _generate_pdf(self, markdown_content: str, filepath: str) -> bool:
-        """Convert markdown to PDF using WeasyPrint."""
+        """Convert markdown to PDF using WeasyPrint (runs in thread pool via caller)."""
         try:
             from weasyprint import HTML
 
@@ -137,14 +140,15 @@ class OutputCompiler:
                 extensions=["tables", "fenced_code", "codehilite"],
             )
 
+            # P6: removed Google Fonts @import (live HTTP request inside PDF render).
+            # Using system font stack instead — eliminates 0.5-2s network call.
             full_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
         body {{
-            font-family: 'Inter', Helvetica, Arial, sans-serif;
+            font-family: system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
             font-size: 11pt;
             line-height: 1.6;
             color: #1a1a1a;

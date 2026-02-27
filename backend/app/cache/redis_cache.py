@@ -139,6 +139,29 @@ class SemanticCache:
             print(f"[SemanticCache] Error storing result: {e}")
             self._redis = None
 
+    async def clear_cache(self) -> bool:
+        """Clear all cache entries from Redis."""
+        r = await self._get_redis()
+        if r is None:
+            return False
+
+        try:
+            # Plan: Find keys with prefix and delete them + delete the index
+            # Strategy: use scan_iter to find all keys starting with prefix
+            count = 0
+            async for key in r.scan_iter(f"{self._cache_key_prefix}*"):
+                await r.delete(key)
+                count += 1
+            
+            # Delete the index key
+            await r.delete(self._index_key)
+            
+            print(f"[SemanticCache] Successfully cleared {count} cache entries and the index.")
+            return True
+        except Exception as e:
+            print(f"[SemanticCache] Error clearing cache: {e}")
+            return False
+
     async def close(self) -> None:
         if self._redis is not None:
             await self._redis.aclose()

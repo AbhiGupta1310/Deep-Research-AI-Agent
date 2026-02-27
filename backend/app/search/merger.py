@@ -74,6 +74,7 @@ class ResultMerger:
         self,
         all_results: List[Dict[str, Any]],
         hyde_document: str = "",
+        hyde_embedding: Optional[List[float]] = None,
         top_k: int = 15,
     ) -> List[SourceMetadata]:
         """
@@ -82,6 +83,7 @@ class ResultMerger:
         Args:
             all_results: Flat list of search result dicts from all providers.
             hyde_document: HyDE hypothetical document for relevance scoring.
+            hyde_embedding: Pre-computed HyDE embedding (P4 — skips API call if supplied).
             top_k: Number of top results to return.
 
         Returns:
@@ -93,12 +95,18 @@ class ResultMerger:
         # Step 1: Deduplicate by URL
         unique_results = self._deduplicate_by_url(all_results)
 
-        # Step 2: Fetch embeddings for HyDE and all deduplicated documents in parallel
-        hyde_embedding_task = embed_text(hyde_document)
+        # Step 2: Embed documents. If a pre-computed HyDE embedding is supplied,
+        # skip the embed_text() API call (P4 optimization).
         contents_to_embed = [res.get("content", "") for res in unique_results]
-        doc_embeddings_task = embed_texts(contents_to_embed)
-        
-        hyde_emb, doc_embeddings = await asyncio.gather(hyde_embedding_task, doc_embeddings_task)
+        if hyde_embedding is not None:
+            # Reuse the caller-supplied vector; only embed documents
+            doc_embeddings = await embed_texts(contents_to_embed)
+            hyde_emb = hyde_embedding
+        else:
+            # Fallback: compute HyDE embedding here (slower path)
+            hyde_embedding_task = embed_text(hyde_document)
+            doc_embeddings_task = embed_texts(contents_to_embed)
+            hyde_emb, doc_embeddings = await asyncio.gather(hyde_embedding_task, doc_embeddings_task)
 
         # Step 3: Convert to SourceMetadata and score each
         scored_results = []

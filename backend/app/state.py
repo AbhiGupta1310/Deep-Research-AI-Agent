@@ -104,7 +104,8 @@ class QueryAnalysisAndHyDE(BaseModel):
 # ============================================================
 
 class ReportStateInput(TypedDict):
-    topic: str  # Report topic
+    topic: str   # Report topic
+    depth: str   # 'quick' or 'deep'
 
 
 class ReportStateOutput(TypedDict):
@@ -114,12 +115,14 @@ class ReportStateOutput(TypedDict):
 
 class ReportState(TypedDict):
     topic: str                                              # Report topic
+    depth: str                                              # 'quick' or 'deep'
     sections: list[Section]                                 # List of report sections
     completed_sections: Annotated[list, operator.add]       # Send() API — accumulated
     report_sections_from_research: str                      # Formatted completed sections as context
     final_report: str                                       # Final compiled report
     # v2.0 additions
     hyde_document: str                                      # HyDE hypothetical ideal answer
+    hyde_embedding: Optional[List[float]]                   # Pre-computed HyDE embedding vector (P4)
     sub_queries: list[str]                                  # Expanded sub-queries from HyDE
     search_results: dict                                    # Per-section search results
     sources: Annotated[list, operator.add]                  # Full source metadata with credibility
@@ -138,6 +141,7 @@ class SectionState(TypedDict):
     # v2.0 additions
     search_results: list[dict]                              # Raw search results with metadata
     hyde_document: str                                      # HyDE context passed from parent
+    hyde_embedding: Optional[List[float]]                   # Pre-computed HyDE embedding (P4)
     domain: str                                             # Extracted domain from query analyzer
     depth: str                                              # Quick or Deep depth variable
 

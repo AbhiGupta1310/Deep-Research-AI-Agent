@@ -38,6 +38,7 @@ from .prompts import (
     SEARCH_ROUTER_PROMPT,
 )
 from .cache.redis_cache import SemanticCache
+from .embeddings import embed_text
 
 # Singleton instances
 _semantic_cache = SemanticCache()
@@ -90,7 +91,7 @@ async def query_analyzer_hyde(state: ReportState):
     prompt = QUERY_ANALYZER_AND_HYDE_PROMPT.format(topic=topic)
 
     try:
-        result = structured_llm.invoke(
+        result = await structured_llm.ainvoke(
             [
                 SystemMessage(content=prompt),
                 HumanMessage(
@@ -106,8 +107,17 @@ async def query_analyzer_hyde(state: ReportState):
         domain = ""
         hyde_document = topic
 
+    # Step 3: Pre-compute HyDE embedding ONCE so all sections reuse it (P4)
+    hyde_embedding = None
+    try:
+        hyde_embedding = await embed_text(hyde_document)
+        print(f"--- HyDE Embedding Pre-computed ({len(hyde_embedding) if hyde_embedding else 0} dims) ---")
+    except Exception as e:
+        print(f"[Query Analyzer] HyDE embedding failed: {e}")
+
     return {
         "hyde_document": hyde_document,
+        "hyde_embedding": hyde_embedding,
         "cache_hit": False,
         "domain": domain,
     }
@@ -138,7 +148,7 @@ async def generate_report_plan(state: ReportState):
     """Generate the overall plan for building the report."""
 
     topic = state["topic"]
-    depth = state.get("metadata", {}).get("depth", "deep")
+    depth = state.get("depth", "deep")
     print(f"--- Generating Report Plan (Depth: {depth}) ---")
 
     report_structure = DEFAULT_REPORT_STRUCTURE
@@ -153,8 +163,8 @@ async def generate_report_plan(state: ReportState):
     )
 
     try:
-        # Generate queries
-        results = structured_llm.invoke(
+        # Generate queries (P1: was .invoke → now .ainvoke)
+        results = await structured_llm.ainvoke(
             [
                 SystemMessage(content=system_instructions_query),
                 HumanMessage(
@@ -169,22 +179,34 @@ async def generate_report_plan(state: ReportState):
             for query in results.queries
         ]
 
-        # Multi-source search for planning context
-        all_results = []
-        for query in query_list[:3]:  # Limit to 3 queries (not 4) for planning
-            provider_tasks = [
-                _tavily.search(query, num_results=2),  # Reduced from 3
-                _serper.search(query, num_results=2),  # Reduced from 3
+        # Multi-source search for planning context — P2: all queries run in PARALLEL
+        async def _plan_search_one(query: str):
+            """Run Tavily + Serper for a single planning query in parallel."""
+            tasks = [
+                _tavily.search(query, num_results=2),
+                _serper.search(query, num_results=2),
             ]
-            results = await asyncio.gather(*provider_tasks, return_exceptions=True)
-            for result in results:
-                if isinstance(result, list):
-                    all_results.extend(result)
+            pair_results = await asyncio.gather(*tasks, return_exceptions=True)
+            flat = []
+            for r in pair_results:
+                if isinstance(r, list):
+                    flat.extend(r)
+            return flat
 
-            # Cap results to prevent memory bloat
-            if len(all_results) > 20:
-                all_results = all_results[:20]
-                break
+        # Fire all 3 queries simultaneously instead of sequentially
+        batch = await asyncio.gather(
+            *[_plan_search_one(q) for q in query_list[:3]],
+            return_exceptions=True,
+        )
+
+        all_results = []
+        for group in batch:
+            if isinstance(group, list):
+                all_results.extend(group)
+
+        # Cap results to prevent memory bloat
+        if len(all_results) > 20:
+            all_results = all_results[:20]
 
         if not all_results:
             print("Warning: No search results returned")
@@ -206,7 +228,7 @@ async def generate_report_plan(state: ReportState):
         )
 
         structured_llm = get_cheap_llm().with_structured_output(Sections)
-        report_sections = structured_llm.invoke(
+        report_sections = await structured_llm.ainvoke(
             [
                 SystemMessage(content=system_instructions_sections),
                 HumanMessage(
@@ -307,7 +329,7 @@ async def multi_source_search(state: SectionState):
     user_msg = f"Determine the best search providers for these queries:\n{queries_text}"
 
     try:
-        route_results = structured_llm.invoke(
+        route_results = await structured_llm.ainvoke(
             [SystemMessage(content=prompt), HumanMessage(content=user_msg)]
         )
         routes = route_results.routes
@@ -418,9 +440,11 @@ async def result_merger_ranker(state: SectionState):
         return {"source_str": "No search results available.", "search_results": []}
 
     # Merge, deduplicate, and rank using the ResultMerger
+    # P4: use pre-computed HyDE embedding from state (avoids redundant embed_text API call)
     ranked_sources = await _merger.merge_and_rank(
         raw_results,
         hyde_document=state["section"].description,
+        hyde_embedding=state.get("hyde_embedding", None),
         top_k=10,
     )
 
@@ -487,13 +511,20 @@ def parallelize_section_writing(state: ReportState):
     """Fan-out: kick off section builders in parallel for research sections."""
 
     hyde_doc = state.get("hyde_document", "")
+    hyde_embedding = state.get("hyde_embedding", None)  # P4: pre-computed vector
     domain = state.get("domain", "")
-    depth = state.get("metadata", {}).get("depth", "deep")
+    depth = state.get("depth", "deep")  # read directly from ReportState (bug fix)
 
     return [
         Send(
             "section_builder_with_web_search",
-            {"section": s, "hyde_document": hyde_doc, "domain": domain, "depth": depth},
+            {
+                "section": s,
+                "hyde_document": hyde_doc,
+                "hyde_embedding": hyde_embedding,
+                "domain": domain,
+                "depth": depth,
+            },
         )
         for s in state["sections"]
         if s.research
