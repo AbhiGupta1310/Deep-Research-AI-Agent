@@ -12,7 +12,7 @@ from ..embeddings import embed_text, cosine_similarity
 
 
 CACHE_SIMILARITY_THRESHOLD = 0.90
-CACHE_TTL_SECONDS = 86400  # 24 hours
+CACHE_TTL_SECONDS = None
 
 
 class SemanticCache:
@@ -128,9 +128,8 @@ class SemanticCache:
 
             await r.hset(self._index_key, cache_key, index_entry)
 
-            await r.setex(
+            await r.set(
                 f"{self._cache_key_prefix}{cache_key}",
-                CACHE_TTL_SECONDS,
                 json.dumps(report_data),
             )
 
