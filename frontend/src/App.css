@@ -1125,6 +1125,19 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+.model-badge {
+  background: rgba(167, 139, 250, 0.1);
+  color: var(--primary-lighter);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid rgba(167, 139, 250, 0.2);
+  margin-left: auto;
+}
+
 .spinner-icon {
   animation: spin 1s linear infinite;
 }
@@ -1162,6 +1175,21 @@ button:disabled {
   align-items: center;
   gap: 0.5rem;
   color: var(--text-primary);
+}
+
+.cache-hit-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.75rem;
+  background: var(--primary-gradient);
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 700;
+  border-radius: 999px;
+  margin-left: 1rem;
+  box-shadow: 0 0 15px var(--primary-glow);
+  animation: pulseGlow 2s ease-in-out infinite;
 }
 
 .report-actions {
@@ -1232,6 +1260,7 @@ button:disabled {
 
 .meta-chip:hover {
   background: rgba(124, 58, 237, 0.12);
+  cursor: help;
 }
 
 .meta-chip.meta-high {
@@ -1247,40 +1276,70 @@ button:disabled {
 }
 
 /* ==========================================
-   Executive Summary Card
+   Executive Summary / Key Takeaways Card
    ========================================== */
-.exec-summary-card {
-  margin: 0;
-  background: rgba(124, 58, 237, 0.03);
-  border-bottom: 1px solid var(--border);
+.summary-card {
+  margin: 1rem 1.5rem;
+  background: linear-gradient(
+    145deg,
+    rgba(124, 58, 237, 0.08) 0%,
+    rgba(15, 15, 50, 0.4) 100%
+  );
+  border: 1px solid rgba(124, 58, 237, 0.2);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  position: relative;
 }
 
-.exec-summary-header {
+.summary-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: var(--primary-gradient);
+  opacity: 0.6;
+}
+
+.summary-card-header {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.8rem 1.5rem;
-  font-size: 0.76rem;
+  gap: 0.6rem;
+  padding: 0.9rem 1.25rem;
+  background: rgba(124, 58, 237, 0.05);
+  border-bottom: 1px solid rgba(124, 58, 237, 0.1);
+}
+
+.summary-card-header h3 {
+  margin: 0;
+  font-family: "Outfit", sans-serif;
+  font-size: 0.85rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--primary-light);
-  background: rgba(124, 58, 237, 0.05);
-  border-bottom: 1px solid rgba(124, 58, 237, 0.08);
 }
 
-.exec-summary-body {
+.summary-card-content {
   padding: 1.25rem 1.5rem;
-  font-size: 0.92rem;
-  line-height: 1.75;
+  font-size: 0.9rem;
+  line-height: 1.7;
   color: var(--text-primary);
 }
 
-.exec-summary-body p {
-  margin: 0.4rem 0;
+.summary-card-content ul {
+  padding-left: 1.25rem;
+  margin: 0.5rem 0;
 }
 
-.exec-summary-body strong {
+.summary-card-content li {
+  margin-bottom: 0.5rem;
+  color: var(--text-secondary);
+}
+
+.summary-card-content strong {
   color: var(--primary-lighter);
 }
 

@@ -18,10 +18,13 @@ try:
 except ImportError:
     chromadb = None
 
+TOP_K = 7  # retrieve more candidates
+
+ENTITY_BOOST_FACTOR = 0.75  
 
 # Tune these two values based on your embedding model
-CONTEXT_THRESHOLD = 0.65  # chunk is a direct answer source
-DOMAIN_THRESHOLD = 0.85  # chunk is in the same subject area but not a direct answer
+CONTEXT_THRESHOLD = 0.70  # chunk is a direct answer source
+DOMAIN_THRESHOLD = 0.90  # chunk is in the same subject area but not a direct answer
 
 
 class FollowupChatHandler:
@@ -35,6 +38,33 @@ class FollowupChatHandler:
 
     def __init__(self):
         self._chroma_client = None
+
+    def _extract_entities(self, text: str) -> List[str]:
+        """
+        Extract likely entity tokens from messy user input.
+        Works even with lowercase and minor typos.
+        """
+
+        stopwords = {
+        "what","why","when","where","which","who",
+        "is","are","do","does","did","can","could",
+        "should","would","explain","tell","about",
+        "the","a","an","to","for","of"
+        }
+
+        entities = []
+
+        for w in text.split():
+            w_clean = w.strip(".,!?()[]{}\"'").lower()
+
+            if (
+                len(w_clean) >= 2      # catch AI, ML, etc.
+                and w_clean not in stopwords
+                and any(c.isalpha() for c in w_clean)
+            ):
+                entities.append(w_clean)
+
+        return list(set(entities))
 
     def _get_chroma_client(self):
         """Lazy init ChromaDB client."""
@@ -139,19 +169,40 @@ class FollowupChatHandler:
             query_embedding = await embed_text(question)
             results = collection.query(
                 query_embeddings=[query_embedding],
-                n_results=min(5, collection.count()),
+                n_results=min(TOP_K, collection.count()),
             )
 
             retrieved_chunks: List[str] = results.get("documents", [[]])[0]
             distances: List[float] = results.get("distances", [[]])[0]
 
-            best_distance = min(distances) if distances else 1.0
+            entities = self._extract_entities(question)
+            # ── APPLY ENTITY BOOST ───────────────────────────
+            boosted = []
+            for chunk, dist in zip(retrieved_chunks, distances):
+                boosted_dist = dist
+
+                chunk_lower = chunk.lower()
+
+                for ent in entities:
+                    if ent in chunk_lower and dist <= DOMAIN_THRESHOLD:
+                        boosted_dist = min(dist * ENTITY_BOOST_FACTOR, dist)
+                        break
+
+                boosted.append((chunk, boosted_dist))
+
+            # Sort by boosted distance (lower = better)
+            boosted.sort(key=lambda x: x[1])
+
+            boosted_chunks = [c for c, _ in boosted]
+            boosted_distances = [d for _, d in boosted]
+
+            best_distance = boosted_distances[0] if boosted_distances else 1.0
 
             # ── Route based on distance ──────────────────────────────────────
 
             if best_distance <= CONTEXT_THRESHOLD:
                 # Good match in report → answer from context
-                return await self._answer_from_context(question, retrieved_chunks, llm)
+                return await self._answer_from_context(question, boosted_chunks, llm)
 
             elif best_distance <= DOMAIN_THRESHOLD:
                 # Same domain but not covered in report → general knowledge fallback
@@ -187,7 +238,7 @@ class FollowupChatHandler:
 
         context = "\n\n---\n\n".join(chunks)
 
-        response = llm.invoke(
+        response = await llm.ainvoke(
             [
                 SystemMessage(
                     content=(
@@ -215,7 +266,7 @@ class FollowupChatHandler:
         """
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        response = llm.invoke(
+        response = await llm.ainvoke(
             [
                 SystemMessage(
                     content=(
@@ -238,12 +289,12 @@ class FollowupChatHandler:
     def _chunk_report(
         self,
         content: str,
-        chunk_size: int = 800,  # Increased from 600 to reduce chunk count
-        overlap: int = 150,  # Increased from 120 for better context
+        chunk_size: int = 400,  # Decreased from 800 for better granularity
+        overlap: int = 100,  # Decreased from 150
     ) -> List[str]:
         """
         Sliding window chunking with overlap.
-        Optimized: larger chunks = fewer total chunks = less memory.
+        Optimized: smaller chunks = more specific retrieval context.
         """
         text = content.replace("\r", "")
         chunks = []

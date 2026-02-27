@@ -53,6 +53,7 @@ function App() {
   const [error, setError] = useState(null);
   const [progressSteps, setProgressSteps] = useState([]);
   const [activeTab, setActiveTab] = useState("markdown");
+  const [cacheHit, setCacheHit] = useState(false);
 
   // Chat state
   const [chatEnabled, setChatEnabled] = useState(false);
@@ -156,6 +157,7 @@ function App() {
     setCostEstimate(0);
     setJsonReport(null);
     setSuggestionChips([]);
+    setCacheHit(false);
 
     try {
       const response = await fetch(`${API_URL}/api/research`, {
@@ -215,6 +217,13 @@ function App() {
         timestamp: new Date().toLocaleTimeString(),
       },
     ]);
+
+    if (
+      (type === "query_analyzing" || type === "cache_hit") &&
+      data?.cache_hit
+    ) {
+      setCacheHit(true);
+    }
 
     if (type === "report_ready" && data) {
       setReportContent(data.content || data.markdown_content);
@@ -366,10 +375,6 @@ function App() {
               <span className="feature-pill-icon">🔍</span>5 Search Providers
             </div>
             <div className="feature-pill">
-              <span className="feature-pill-icon">🧠</span>
-              3-Tier LLM Hierarchy
-            </div>
-            <div className="feature-pill">
               <span className="feature-pill-icon">⚡</span>
               Real-Time Streaming
             </div>
@@ -494,11 +499,6 @@ function App() {
             </div>
             <div className="stat-divider"></div>
             <div className="stat-item">
-              <div className="stat-number">3</div>
-              <div className="stat-label">LLM Tiers</div>
-            </div>
-            <div className="stat-divider"></div>
-            <div className="stat-item">
               <div className="stat-number">1</div>
               <div className="stat-label">Pass Per Section</div>
             </div>
@@ -559,6 +559,11 @@ function App() {
             <div className="report-header">
               <h2>
                 <Search size={18} /> Research Report: {topic}
+                {cacheHit && (
+                  <span className="cache-hit-badge">
+                    <Zap size={12} fill="currentColor" /> Retrieved from Cache
+                  </span>
+                )}
               </h2>
               <div className="report-actions">
                 {reportUrl && (
@@ -608,7 +613,10 @@ function App() {
                   </div>
                 )}
                 {costEstimate > 0 && (
-                  <div className="meta-chip">
+                  <div
+                    className="meta-chip"
+                    title="Estimated API cost breakdown"
+                  >
                     <DollarSign size={13} />
                     <span>${costEstimate.toFixed(4)}</span>
                   </div>
@@ -616,7 +624,20 @@ function App() {
               </div>
             )}
 
-            {/* Executive Summary Card removed strictly to prevent duplication */}
+            {/* Executive Summary / Key Takeaways Card */}
+            {executiveSummary && (
+              <div className="summary-card">
+                <div className="summary-card-header">
+                  <Sparkles size={16} className="text-primary" />
+                  <h3>Executive Summary & Key Takeaways</h3>
+                </div>
+                <div className="summary-card-content">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {executiveSummary}
+                  </ReactMarkdown>
+                </div>
+              </div>
+            )}
 
             {/* Format Tabs */}
             <div className="format-tabs">

@@ -1,6 +1,6 @@
 import os
 import pytest
-from backend.app.search.tavily_search import TavilySearchProvider
+from app.search.tavily_search import TavilySearchProvider
 
 def test_tavily_enforcement_no_key(monkeypatch):
     """Test that TavilySearchProvider raises ValueError when TAVILY_API_KEY is missing."""
