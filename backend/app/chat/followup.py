@@ -8,6 +8,8 @@ Answer flow (single LLM call max):
   distance >  DOMAIN_THRESHOLD    → politely decline (no LLM call)
 """
 
+from ..embeddings import embed_texts , embed_text
+
 import uuid
 from typing import List, Dict, Any
 
@@ -72,6 +74,7 @@ class FollowupChatHandler:
             collection = client.get_or_create_collection(
                 name=f"report_{report_id}",
                 metadata={"hnsw:space": "cosine"},
+                embedding_function=None,
             )
 
             chunks = self._chunk_report(report_content)
@@ -87,10 +90,11 @@ class FollowupChatHandler:
 
             if not chunks:
                 return False
-
+            embeddings = await embed_texts(chunks)
             ids = [f"chunk_{i}" for i in range(len(chunks))]
             collection.add(
                 documents=chunks,
+                embeddings=embeddings,
                 ids=ids,
                 metadatas=[{"chunk_index": i} for i in range(len(chunks))],
             )
@@ -132,9 +136,9 @@ class FollowupChatHandler:
 
         try:
             collection = client.get_collection(name=f"report_{report_id}")
-
+            query_embedding = await embed_text(question)
             results = collection.query(
-                query_texts=[question],
+                query_embeddings=[query_embedding],
                 n_results=min(5, collection.count()),
             )
 
