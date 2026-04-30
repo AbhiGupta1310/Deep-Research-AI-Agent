@@ -38,6 +38,7 @@ frontend/dist/
 htmlcov/
 
 # ── Generated Outputs ─────────────────────────────────────
+outputs
 outputs/
 backend/outputs/
 backend/chroma_data/backend/cache/
