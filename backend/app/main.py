@@ -22,6 +22,7 @@ import asyncio
 import json
 import random
 import warnings
+import uuid
 
 # Memory optimization: enable garbage collection in production
 if os.getenv("RENDER") or os.getenv("PRODUCTION"):
@@ -102,6 +103,10 @@ class ResearchRequest(BaseModel):
     depth: str = Field(default="deep", description="Research depth: 'quick' or 'deep'")
     output_format: str = Field(default="both", description="Output format: 'pdf', 'markdown', or 'both'")
 
+class ResumeRequest(BaseModel):
+    topic: str
+    depth: str
+    sections: list[dict]
 
 class ChatRequest(BaseModel):
     question: str = Field(..., max_length=1000, description="Follow-up question about the report")
@@ -121,6 +126,8 @@ async def conduct_research(request: ResearchRequest):
     # Create an SSE manager for this session
     sse_manager = SSEManager()
 
+    thread_id = str(uuid.uuid4())
+
     async def event_stream():
         try:
             async with _research_semaphore:
@@ -133,15 +140,17 @@ async def conduct_research(request: ResearchRequest):
                 # Stream events from the graph
                 final_report = None
                 output_metadata = None
+                config = {
+                    "recursion_limit": 50,
+                    "configurable": {"thread_id": thread_id},
+                    "metadata": {"topic": topic, "depth": depth},
+                    "tags": ["v2", depth],
+                }
 
                 # Run the graph and emit progress events
                 async for event in reporter_agent.astream(
                     {"topic": topic, "depth": depth},
-                    config={
-                        "recursion_limit": 50,
-                        "metadata": {"topic": topic, "depth": depth},
-                        "tags": ["v2", depth],
-                    }
+                    config=config
                 ):
                     # Map graph node completions to SSE events
                     for node_name, node_output in event.items():
@@ -157,6 +166,29 @@ async def conduct_research(request: ResearchRequest):
                         if isinstance(node_output, dict) and 'output_metadata' in node_output:
                             output_metadata = node_output['output_metadata']
 
+                # Check if graph is paused for HITL
+                state = reporter_agent.get_state(config)
+                if state.next:
+                    sections = state.values.get("sections", [])
+                    sections_dicts = []
+                    for s in sections:
+                        if hasattr(s, "model_dump"):
+                            sections_dicts.append(s.model_dump())
+                        elif hasattr(s, "dict"):
+                            sections_dicts.append(s.dict())
+                        elif isinstance(s, dict):
+                            sections_dicts.append(s)
+                        else:
+                            sections_dicts.append({"name": str(s)})
+
+                    await sse_manager.emit(
+                        EventTypes.PLAN_REVIEW_REQUIRED,
+                        "Review generated plan before continuing.",
+                        data={"thread_id": thread_id, "sections": sections_dicts}
+                    )
+                    await sse_manager.close()
+                    return
+
                 if not final_report:
                     await sse_manager.emit(
                         EventTypes.ERROR,
@@ -165,69 +197,7 @@ async def conduct_research(request: ResearchRequest):
                     await sse_manager.close()
                     return
 
-                # Build dynamic chat suggestion chips using cheap LLM
-                suggestion_chips = []
-                if final_report:
-                    try:
-                        # 1. Check if chips were already cached
-                        cached_entry = await _semantic_cache.check_cache(topic)
-                        all_chips = []
-                        if cached_entry and "suggestion_chips" in cached_entry and cached_entry["suggestion_chips"]:
-                            all_chips = cached_entry["suggestion_chips"]
-                        else:
-                            # 2. Generate 10 manually via prompt if not found
-                            structured_llm = get_cheap_llm().with_structured_output(RequestQuestions)
-                            instructions = "You are a concise AI. Generate exactly 10 insightful questions that can be answered DIRECTLY using the provided report snippet. These questions will be shown to users as suggestions to ask the document. Keep them short, distinct, and under 10 words each."
-                            usr_msg = f"Report Snippet:\n\n{final_report[:3000]}"
-                            res = await structured_llm.ainvoke([
-                                SystemMessage(content=instructions),
-                                HumanMessage(content=usr_msg)
-                            ])
-                            all_chips = res.questions
-                            
-                            # 3. Save all 10 into cache to prevent future re-generation
-                            if cached_entry:
-                                cached_entry["suggestion_chips"] = all_chips
-                                await _semantic_cache.store_result(topic, cached_entry)
-                                
-                        # 4. Pick exactly 3 random chips to show the user
-                        if all_chips:
-                            suggestion_chips = random.sample(all_chips, min(3, len(all_chips)))
-                    except Exception as e:
-                        logger.warning(f"Failed to generate dynamic chat chips: {e}")
-                
-                # Build the rich completion payload
-                report_id = (output_metadata or {}).get("report_id", "unknown")
-                completion_data = {
-                    "report_id": report_id,
-                    "suggestion_chips": suggestion_chips,
-                    "content": final_report,
-                    "chat_enabled": (output_metadata or {}).get("chat_enabled", False),
-                    # PDF
-                    "pdf_filename": (output_metadata or {}).get("pdf_filename", ""),
-                    "pdf_url": (output_metadata or {}).get("pdf_url", ""),
-                    # Markdown
-                    "markdown_content": (output_metadata or {}).get("markdown_content", final_report),
-                    "markdown_url": f"/api/reports/{report_id}/markdown",
-                    # JSON
-                    "json_url": f"/api/reports/{report_id}/json",
-                    "json_report": (output_metadata or {}).get("json_data", {}),
-                    # Confidence & sources
-                    "source_count": (output_metadata or {}).get("source_count", 0),
-                    "runtime_seconds": (output_metadata or {}).get("runtime_seconds", 0),
-                    # Cost estimate
-                    "cost_estimate_usd": CostTracker.estimate_run_cost(
-                        len((output_metadata or {}).get("json_data", {}).get("sections", []))
-                    ),
-                }
-
-                # Emit completion event with all data
-                await sse_manager.emit(
-                    EventTypes.REPORT_READY,
-                    "Report ready!",
-                    data=completion_data,
-                )
-
+                await _finalize_report(topic, final_report, output_metadata, sse_manager)
         except Exception as e:
             logger.error(f"Error during research: {e}", exc_info=True)
             await sse_manager.emit(
@@ -236,24 +206,138 @@ async def conduct_research(request: ResearchRequest):
             )
         finally:
             await sse_manager.close()
-            # Force garbage collection after large research task
             gc.collect()
 
-    # Start the graph execution in a background task
-    # and yield SSE events as they come
     async def sse_generator():
-        # Start the pipeline in a background task
         task = asyncio.create_task(event_stream())
-
-        # Yield SSE events from the manager's queue
         async for event_data in sse_manager.stream():
             yield event_data
-
-        # Ensure the task completes
         await task
 
     return EventSourceResponse(sse_generator())
 
+async def _finalize_report(topic, final_report, output_metadata, sse_manager):
+    # Build dynamic chat suggestion chips using cheap LLM
+    suggestion_chips = []
+    if final_report:
+        try:
+            # 1. Check if chips were already cached
+            cached_entry = await _semantic_cache.check_cache(topic)
+            all_chips = []
+            if cached_entry and "suggestion_chips" in cached_entry and cached_entry["suggestion_chips"]:
+                all_chips = cached_entry["suggestion_chips"]
+            else:
+                # 2. Generate 10 manually via prompt if not found
+                structured_llm = get_cheap_llm().with_structured_output(RequestQuestions)
+                instructions = "You are a concise AI. Generate exactly 10 insightful questions that can be answered DIRECTLY using the provided report snippet. These questions will be shown to users as suggestions to ask the document. Keep them short, distinct, and under 10 words each."
+                usr_msg = f"Report Snippet:\n\n{final_report[:3000]}"
+                res = await structured_llm.ainvoke([
+                    SystemMessage(content=instructions),
+                    HumanMessage(content=usr_msg)
+                ])
+                all_chips = res.questions
+                
+                # 3. Save all 10 into cache to prevent future re-generation
+                if cached_entry:
+                    cached_entry["suggestion_chips"] = all_chips
+                    await _semantic_cache.store_result(topic, cached_entry)
+                    
+            # 4. Pick exactly 3 random chips to show the user
+            if all_chips:
+                suggestion_chips = random.sample(all_chips, min(3, len(all_chips)))
+        except Exception as e:
+            logger.warning(f"Failed to generate dynamic chat chips: {e}")
+    
+    # Build the rich completion payload
+    report_id = (output_metadata or {}).get("report_id", "unknown")
+    completion_data = {
+        "report_id": report_id,
+        "suggestion_chips": suggestion_chips,
+        "content": final_report,
+        "chat_enabled": (output_metadata or {}).get("chat_enabled", False),
+        # PDF
+        "pdf_filename": (output_metadata or {}).get("pdf_filename", ""),
+        "pdf_url": (output_metadata or {}).get("pdf_url", ""),
+        # Markdown
+        "markdown_content": (output_metadata or {}).get("markdown_content", final_report),
+        "markdown_url": f"/api/reports/{report_id}/markdown",
+        # JSON
+        "json_url": f"/api/reports/{report_id}/json",
+        "json_report": (output_metadata or {}).get("json_data", {}),
+        # Confidence & sources
+        "source_count": (output_metadata or {}).get("source_count", 0),
+        "runtime_seconds": (output_metadata or {}).get("runtime_seconds", 0),
+        # Cost estimate
+        "cost_estimate_usd": CostTracker.estimate_run_cost(
+            len((output_metadata or {}).get("json_data", {}).get("sections", []))
+        ),
+    }
+
+    # Emit completion event with all data
+    await sse_manager.emit(
+        EventTypes.REPORT_READY,
+        "Report ready!",
+        data=completion_data,
+    )
+
+@app.post("/api/research/resume/{thread_id}")
+async def resume_research(thread_id: str, request: ResumeRequest):
+    """Resume a paused research graph after human approval of the plan."""
+    logger.info(f"Resuming research for thread: {thread_id}")
+    sse_manager = SSEManager()
+    
+    async def event_stream():
+        try:
+            async with _research_semaphore:
+                config = {"configurable": {"thread_id": thread_id}}
+                
+                # Reconstruct Section objects
+                from .state import Section
+                updated_sections = [Section(**s) for s in request.sections]
+                
+                # Update state with approved sections
+                reporter_agent.update_state(config, {"sections": updated_sections})
+                
+                await sse_manager.emit(
+                    EventTypes.PLAN_GENERATED,
+                    f"Report plan approved ({len(updated_sections)} sections)"
+                )
+                
+                # Resume graph execution
+                final_report = None
+                output_metadata = None
+                
+                async for event in reporter_agent.astream(None, config=config):
+                    for node_name, node_output in event.items():
+                        sse_event = _map_node_to_sse_event(node_name, node_output)
+                        if sse_event:
+                            await sse_manager.emit(**sse_event)
+
+                        if isinstance(node_output, dict) and 'final_report' in node_output:
+                            final_report = node_output['final_report']
+                        if isinstance(node_output, dict) and 'output_metadata' in node_output:
+                            output_metadata = node_output['output_metadata']
+
+                if not final_report:
+                    await sse_manager.emit(EventTypes.ERROR, "Failed to generate report.")
+                    await sse_manager.close()
+                    return
+                
+                await _finalize_report(request.topic, final_report, output_metadata, sse_manager)
+        except Exception as e:
+            logger.error(f"Error resuming research: {e}", exc_info=True)
+            await sse_manager.emit(EventTypes.ERROR, f"Error: {str(e)}")
+        finally:
+            await sse_manager.close()
+            gc.collect()
+
+    async def sse_generator():
+        task = asyncio.create_task(event_stream())
+        async for event_data in sse_manager.stream():
+            yield event_data
+        await task
+
+    return EventSourceResponse(sse_generator())
 
 def _map_node_to_sse_event(node_name: str, node_output) -> dict | None:
     """Map a LangGraph node completion to an SSE event."""
@@ -301,6 +385,11 @@ def _map_node_to_sse_event(node_name: str, node_output) -> dict | None:
         # Attach section info if available
         data = {}
         if isinstance(node_output, dict):
+            # Capture cache hit
+            if node_output.get("cache_hit"):
+                data["cache_hit"] = True
+                mapping["message"] = "Semantic cache hit! Retrieving instant report..."
+
             if "sections" in node_output:
                 section_names = []
                 for s in node_output["sections"]:

@@ -78,7 +78,7 @@ class OutputCompiler:
 
         # --- 2. PDF via WeasyPrint (P6: offloaded to thread pool — non-blocking) ---
         pdf_path = os.path.join(self._output_dir, f"{safe_name}.pdf")
-        pdf_ok = await asyncio.to_thread(self._generate_pdf, md_content, pdf_path)
+        pdf_ok = await asyncio.to_thread(self._generate_pdf, md_content, pdf_path, topic)
         if pdf_ok:
             result["pdf_path"] = pdf_path
             result["pdf_filename"] = f"{safe_name}.pdf"
@@ -130,7 +130,7 @@ class OutputCompiler:
     # ------------------------------------------------------------------
     # PDF — WeasyPrint (HTML → PDF)
     # ------------------------------------------------------------------
-    def _generate_pdf(self, markdown_content: str, filepath: str) -> bool:
+    def _generate_pdf(self, markdown_content: str, filepath: str, topic: str) -> bool:
         """Convert markdown to PDF using WeasyPrint (runs in thread pool via caller)."""
         try:
             from weasyprint import HTML
@@ -142,60 +142,110 @@ class OutputCompiler:
 
             # P6: removed Google Fonts @import (live HTTP request inside PDF render).
             # Using system font stack instead — eliminates 0.5-2s network call.
+            # Modern premium light theme for PDF
             full_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <style>
-        body {{
-            font-family: system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
-            font-size: 11pt;
-            line-height: 1.6;
-            color: #1a1a1a;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 40px;
+        @page {{
+            margin: 2.5cm;
+            @bottom-right {{
+                content: counter(page);
+                font-size: 9pt;
+                color: #71717a;
+            }}
         }}
-        h1 {{ color: #111; font-size: 24pt; border-bottom: 2px solid #e5e5e5; padding-bottom: 8px; }}
-        h2 {{ color: #222; font-size: 18pt; margin-top: 24px; }}
-        h3 {{ color: #333; font-size: 14pt; }}
-        p {{ margin-bottom: 12px; }}
+        body {{
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            font-size: 11pt;
+            line-height: 1.7;
+            color: #18181b;
+            margin: 0;
+            padding: 0;
+        }}
+        h1 {{ 
+            color: #f96c3d; 
+            font-size: 28pt; 
+            margin-bottom: 30pt;
+            line-height: 1.2;
+            font-weight: 800;
+        }}
+        h2 {{ 
+            color: #18181b; 
+            font-size: 20pt; 
+            margin-top: 32pt; 
+            margin-bottom: 16pt;
+            border-bottom: 1px solid #e4e4e7;
+            padding-bottom: 8pt;
+            font-weight: 700;
+        }}
+        h3 {{ 
+            color: #27272a; 
+            font-size: 15pt; 
+            margin-top: 24pt;
+            font-weight: 600;
+        }}
+        p {{ margin-bottom: 14pt; }}
+        ul, ol {{ margin-bottom: 14pt; padding-left: 20pt; }}
+        li {{ margin-bottom: 6pt; }}
+        li::marker {{ color: #f96c3d; font-weight: bold; }}
+        strong {{ color: #09090b; font-weight: 700; }}
+        a {{ color: #f96c3d; text-decoration: none; }}
         code {{
             background-color: #f4f4f5;
-            padding: 2px 6px;
-            border-radius: 4px;
+            padding: 2pt 4pt;
+            border-radius: 4pt;
             font-family: 'Courier New', monospace;
             font-size: 10pt;
+            color: #c026d3;
         }}
         pre {{
             background-color: #f4f4f5;
-            padding: 16px;
-            border-radius: 8px;
+            padding: 16pt;
+            border-radius: 8pt;
             white-space: pre-wrap;
-            word-wrap: break-word;
+            font-size: 10pt;
+            border: 1px solid #e4e4e7;
+            margin: 16pt 0;
+        }}
+        blockquote {{
+            border-left: 4pt solid #f96c3d;
+            padding-left: 16pt;
+            margin: 20pt 0;
+            color: #52525b;
+            font-style: italic;
+            background: #fffaf9;
         }}
         table {{
             border-collapse: collapse;
             width: 100%;
-            margin: 16px 0;
+            margin: 20pt 0;
         }}
         th, td {{
-            border: 1px solid #d4d4d8;
-            padding: 8px 12px;
+            border: 1px solid #e4e4e7;
+            padding: 10pt 12pt;
             text-align: left;
         }}
-        th {{ background-color: #f4f4f5; font-weight: 600; }}
-        blockquote {{
-            border-left: 4px solid #3b82f6;
-            padding-left: 16px;
-            margin-left: 0;
-            color: #4b5563;
+        th {{ 
+            background-color: #f8fafc; 
+            font-weight: 700; 
+            color: #18181b;
         }}
-        .confidence-high {{ color: #16a34a; font-weight: 600; }}
-        .confidence-low {{ color: #dc2626; font-weight: 600; }}
+        .citation {{
+            font-size: 9pt;
+            color: #71717a;
+            vertical-align: super;
+        }}
     </style>
 </head>
 <body>
+    <div style="text-align: center; margin-bottom: 40pt;">
+        <div style="font-size: 10pt; text-transform: uppercase; letter-spacing: 2pt; color: #71717a; margin-bottom: 10pt;">AI Research Intelligence Report</div>
+        <h1>{topic}</h1>
+        <div style="font-size: 10pt; color: #71717a;">Generated on {datetime.now().strftime('%B %d, %Y')}</div>
+    </div>
+    <hr style="border: 0; border-top: 1px solid #e4e4e7; margin-bottom: 40pt;">
     {html_body}
 </body>
 </html>"""

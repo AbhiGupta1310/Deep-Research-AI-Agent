@@ -27,19 +27,20 @@ import {
   CheckCircle,
   XCircle,
   Activity,
+  Trash2,
+  Plus,
+  Play,
 } from "lucide-react";
 import "./App.css";
 
 // Rotating placeholder topics
 const PLACEHOLDER_TOPICS = [
-  "Quantum computing breakthroughs in 2025...",
   "Impact of AI on healthcare diagnostics...",
-  "Climate change mitigation strategies...",
-  "The future of space exploration...",
-  "Advances in CRISPR gene editing...",
   "Decentralized finance and Web3...",
-  "Neuromorphic computing architectures...",
-  "Sustainable energy storage solutions...",
+  "AI Engineers Growth in 2026",
+  "Growth of Indian Stock Market in 2026",
+  "Impact of AI on Banking Sector",
+  "AI Engineers vs Data Scientists",
 ];
 
 function App() {
@@ -54,6 +55,7 @@ function App() {
   const [progressSteps, setProgressSteps] = useState([]);
   const [activeTab, setActiveTab] = useState("markdown");
   const [cacheHit, setCacheHit] = useState(false);
+  const [pendingPlan, setPendingPlan] = useState(null);
 
   // Chat state
   const [chatEnabled, setChatEnabled] = useState(false);
@@ -116,20 +118,7 @@ function App() {
     return () => clearInterval(timeout);
   }, [placeholderIndex, isTyping]);
 
-  // Extract executive summary from report content
-  const executiveSummary = useMemo(() => {
-    if (!reportContent) return null;
-    const patterns = [
-      /## Executive Summary\n([\s\S]*?)(?=\n## )/i,
-      /# Executive Summary\n([\s\S]*?)(?=\n#+ )/i,
-      /## Summary\n([\s\S]*?)(?=\n## )/i,
-    ];
-    for (const pattern of patterns) {
-      const match = reportContent.match(pattern);
-      if (match) return match[1].trim();
-    }
-    return null;
-  }, [reportContent]);
+
 
   // Compute average confidence
   const avgConfidence = useMemo(() => {
@@ -190,7 +179,7 @@ function App() {
             try {
               const eventData = JSON.parse(dataStr);
               handleSSEEvent(eventData);
-            } catch (e) {
+            } catch (err) {
               console.warn("Failed to parse SSE data:", dataStr);
             }
           }
@@ -199,6 +188,60 @@ function App() {
     } catch (err) {
       console.error(err);
       setError(`Error: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resumeResearch = async () => {
+    if (!pendingPlan) return;
+    
+    setLoading(true);
+    const threadId = pendingPlan.thread_id;
+    const sections = pendingPlan.sections;
+    
+    setPendingPlan(null);
+    
+    try {
+      const response = await fetch(`${API_URL}/api/research/resume/${threadId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic, depth, sections }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+
+          if (line.startsWith("data:") || line.startsWith("data: ")) {
+            const dataStr = line.replace(/^data:\s*/, "");
+            try {
+              const eventData = JSON.parse(dataStr);
+              handleSSEEvent(eventData);
+            } catch (err) {
+              console.warn("Failed to parse SSE data:", dataStr);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      setError(`Error resuming research: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -249,10 +292,87 @@ function App() {
       setLoading(false);
     }
 
+    if (type === "plan_review_required" && data) {
+      setPendingPlan({
+        thread_id: data.thread_id,
+        sections: data.sections || [],
+      });
+      setLoading(false);
+    }
+
     if (type === "error") {
       setError(message);
       setLoading(false);
     }
+  };
+
+  const renderPlanReview = () => {
+    if (!pendingPlan) return null;
+
+    const handleUpdateSection = (index, field, value) => {
+      const updated = [...pendingPlan.sections];
+      updated[index][field] = value;
+      setPendingPlan({ ...pendingPlan, sections: updated });
+    };
+
+    const handleRemoveSection = (index) => {
+      const updated = pendingPlan.sections.filter((_, i) => i !== index);
+      setPendingPlan({ ...pendingPlan, sections: updated });
+    };
+
+    const handleAddSection = () => {
+      setPendingPlan({
+        ...pendingPlan,
+        sections: [
+          ...pendingPlan.sections,
+          { name: "New Section", description: "Details about this section...", research: true, plan: "New plan" }
+        ]
+      });
+    };
+
+    return (
+      <div className="plan-review-container">
+        <h2 className="plan-review-title"><CheckCircle size={24} /> Review Research Plan</h2>
+        <p className="plan-review-subtitle">
+          The agent has generated a multi-section plan based on your query. 
+          You can edit the section titles and descriptions below before proceeding.
+        </p>
+        
+        <div className="plan-sections-list">
+          {pendingPlan.sections.map((section, idx) => (
+            <div key={idx} className="plan-section-card">
+              <div className="plan-section-header">
+                <span className="section-number">{idx + 1}</span>
+                <input 
+                  type="text" 
+                  value={section.name} 
+                  onChange={(e) => handleUpdateSection(idx, "name", e.target.value)}
+                  className="section-name-input"
+                />
+                <button onClick={() => handleRemoveSection(idx)} className="section-remove-btn" title="Remove section">
+                  <Trash2 size={16} />
+                </button>
+              </div>
+              <textarea 
+                value={section.description} 
+                onChange={(e) => handleUpdateSection(idx, "description", e.target.value)}
+                className="section-desc-input"
+                rows={3}
+              />
+            </div>
+          ))}
+        </div>
+        
+        <div className="plan-review-actions">
+          <button onClick={handleAddSection} className="plan-add-btn">
+            <Plus size={16} /> Add Section
+          </button>
+          <button onClick={resumeResearch} className="plan-approve-btn">
+            <Play size={16} fill="currentColor" /> Approve & Continue
+          </button>
+        </div>
+      </div>
+    );
   };
 
   const handleChat = async () => {
@@ -338,59 +458,40 @@ function App() {
     <>
       {/* Animated Background */}
       <div className="app-bg">
-        <div className="orb orb-1"></div>
-        <div className="orb orb-2"></div>
-        <div className="orb orb-3"></div>
-        <div className="orb orb-4"></div>
-        {/* Floating particles */}
-        <div className="particles">
-          {[...Array(20)].map((_, i) => (
-            <div key={i} className={`particle particle-${i + 1}`}></div>
-          ))}
-        </div>
-        {/* Grid pattern overlay */}
-        <div className="grid-overlay"></div>
+        <div className="gradient-spotlight"></div>
+        <div className="noise-overlay"></div>
       </div>
 
       <div className="container">
         {/* Hero Header */}
         <header className="header">
-          {/* Glowing Arc */}
-          <div className="glow-arc">
-            {[...Array(16)].map((_, i) => (
-              <div key={i} className={`arc-dot arc-dot-${i + 1}`}></div>
-            ))}
-          </div>
-
-          <h1>Deep Research Agent</h1>
+          <h1>
+            <span className="text-thin">Deep Research</span>{" "}
+            <span className="text-italic text-primary">Agent</span>
+          </h1>
           <p className="subtitle">
             AI-powered deep research with multi-source search, real-time
-            streaming, and publication-quality reports
+            streaming, and publication-quality reports.
           </p>
-          <span className="version-badge">v2.0</span>
 
           {/* Feature Pills */}
           <div className="feature-pills">
-            <div className="feature-pill">
-              <span className="feature-pill-icon">🔍</span>5 Search Providers
-            </div>
-            <div className="feature-pill">
-              <span className="feature-pill-icon">⚡</span>
-              Real-Time Streaming
-            </div>
-            <div className="feature-pill">
-              <span className="feature-pill-icon">🔬</span>
-              Fact Checking
-            </div>
-            <div className="feature-pill">
-              <span className="feature-pill-icon">💬</span>
-              Follow-up Chat
-            </div>
+            <div className="feature-pill">Tavily</div>
+            <div className="feature-pill">Serper</div>
+            <div className="feature-pill">ArXiv</div>
+            <div className="feature-pill">Wikipedia</div>
+            <div className="feature-pill">NewsAPI</div>
+            <div className="feature-pill">Real-Time Streaming</div>
+            <div className="feature-pill">Follow-up Chat</div>
           </div>
         </header>
 
-        {/* Search Card with Animated Border */}
         <div className="card-wrapper">
+          <div className="search-tabs">
+            <div className="search-tab active">
+              What do you want to research?
+            </div>
+          </div>
           <div className="card-glow"></div>
           <div className="card">
             <div className="input-group">
@@ -401,32 +502,51 @@ function App() {
                 onChange={(e) => setTopic(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleResearch()}
               />
-              <select
-                className="depth-select"
-                value={depth}
-                onChange={(e) => setDepth(e.target.value)}
-                title="Research depth"
+              <div className="select-wrapper">
+                <select
+                  className="depth-select"
+                  value={depth}
+                  onChange={(e) => setDepth(e.target.value)}
+                  title="Research depth"
+                >
+                  <option value="quick">Quick</option>
+                  <option value="deep">Deep</option>
+                </select>
+                <div className="select-subtitle">
+                  {depth === "quick"
+                    ? "3-4 sections, ~3 min"
+                    : "5-6 sections, ~6 min"}
+                </div>
+              </div>
+              <div className="select-wrapper">
+                <select
+                  className="format-select"
+                  value={outputFormat}
+                  onChange={(e) => setOutputFormat(e.target.value)}
+                  title="Output format"
+                >
+                  <option value="both">PDF + MD</option>
+                  <option value="pdf">PDF Only</option>
+                  <option value="markdown">Markdown Only</option>
+                </select>
+                <div className="select-subtitle">
+                  {outputFormat === "both"
+                    ? "PDF + Markdown"
+                    : outputFormat === "pdf"
+                      ? "PDF Report"
+                      : "Markdown Doc"}
+                </div>
+              </div>
+              <button
+                className="btn-circle"
+                onClick={handleResearch}
+                disabled={loading}
               >
-                <option value="quick">Quick</option>
-                <option value="deep">Deep</option>
-              </select>
-              <select
-                className="format-select"
-                value={outputFormat}
-                onChange={(e) => setOutputFormat(e.target.value)}
-                title="Output format"
-              >
-                <option value="both">PDF + MD</option>
-                <option value="pdf">PDF Only</option>
-                <option value="markdown">Markdown Only</option>
-              </select>
-              <button onClick={handleResearch} disabled={loading}>
                 {loading ? (
                   <Loader2 className="spinner-icon" size={18} />
                 ) : (
                   <Search size={18} />
                 )}
-                {loading ? "Researching..." : "Research"}
               </button>
             </div>
           </div>
@@ -441,10 +561,28 @@ function App() {
                 <div className="pipeline-icon">
                   <Search size={22} />
                 </div>
-                <div className="pipeline-label">Analyze Query</div>
-                <div className="pipeline-desc">
-                  HyDE anchoring & cache check
+                <div className="pipeline-label">Query + HyDE</div>
+                <div className="pipeline-desc">Intent anchoring</div>
+              </div>
+              <div className="pipeline-connector">
+                <ArrowRight size={16} />
+              </div>
+              <div className="pipeline-step">
+                <div className="pipeline-icon">
+                  <FileText size={22} />
                 </div>
+                <div className="pipeline-label">Report Plan</div>
+                <div className="pipeline-desc">Section blueprints</div>
+              </div>
+              <div className="pipeline-connector">
+                <ArrowRight size={16} />
+              </div>
+              <div className="pipeline-step">
+                <div className="pipeline-icon">
+                  <Zap size={22} />
+                </div>
+                <div className="pipeline-label">Parallel Search</div>
+                <div className="pipeline-desc">5 sources in sync</div>
               </div>
               <div className="pipeline-connector">
                 <ArrowRight size={16} />
@@ -453,8 +591,8 @@ function App() {
                 <div className="pipeline-icon">
                   <Database size={22} />
                 </div>
-                <div className="pipeline-label">Multi-Source Search</div>
-                <div className="pipeline-desc">5 providers in parallel</div>
+                <div className="pipeline-label">Aggregation</div>
+                <div className="pipeline-desc">Deduplication</div>
               </div>
               <div className="pipeline-connector">
                 <ArrowRight size={16} />
@@ -463,18 +601,8 @@ function App() {
                 <div className="pipeline-icon">
                   <Brain size={22} />
                 </div>
-                <div className="pipeline-label">AI Synthesis</div>
-                <div className="pipeline-desc">3-tier LLM hierarchy</div>
-              </div>
-              <div className="pipeline-connector">
-                <ArrowRight size={16} />
-              </div>
-              <div className="pipeline-step">
-                <div className="pipeline-icon">
-                  <Shield size={22} />
-                </div>
-                <div className="pipeline-label">Fact Check</div>
-                <div className="pipeline-desc">Cross-reference claims</div>
+                <div className="pipeline-label">Synthesis</div>
+                <div className="pipeline-desc">Section drafting</div>
               </div>
               <div className="pipeline-connector">
                 <ArrowRight size={16} />
@@ -483,15 +611,15 @@ function App() {
                 <div className="pipeline-icon">
                   <FileCheck size={22} />
                 </div>
-                <div className="pipeline-label">Final Report</div>
-                <div className="pipeline-desc">PDF, Markdown, JSON</div>
+                <div className="pipeline-label">Compile Output</div>
+                <div className="pipeline-desc">PDF + Markdown</div>
               </div>
             </div>
           </div>
         )}
 
         {/* Stats Bar */}
-        {!reportContent && !loading && progressSteps.length === 0 && (
+        {!reportContent && !loading && progressSteps.length === 0 && !pendingPlan && (
           <div className="stats-bar">
             <div className="stat-item">
               <div className="stat-number">5</div>
@@ -553,6 +681,9 @@ function App() {
           </div>
         )}
 
+        {/* Plan Review */}
+        {renderPlanReview()}
+
         {/* Report Display */}
         {reportContent && (
           <div className="report-container">
@@ -587,57 +718,9 @@ function App() {
               </div>
             </div>
 
-            {/* Report Metadata Bar */}
-            {(runtimeSeconds > 0 ||
-              sourceCount > 0 ||
-              avgConfidence !== null) && (
-              <div className="report-meta-bar">
-                {runtimeSeconds > 0 && (
-                  <div className="meta-chip">
-                    <Clock size={13} />
-                    <span>{runtimeSeconds.toFixed(1)}s</span>
-                  </div>
-                )}
-                {sourceCount > 0 && (
-                  <div className="meta-chip">
-                    <Database size={13} />
-                    <span>{sourceCount} sources</span>
-                  </div>
-                )}
-                {avgConfidence !== null && (
-                  <div
-                    className={`meta-chip ${avgConfidence >= 70 ? "meta-high" : "meta-low"}`}
-                  >
-                    <Shield size={13} />
-                    <span>{avgConfidence}% avg confidence</span>
-                  </div>
-                )}
-                {costEstimate > 0 && (
-                  <div
-                    className="meta-chip"
-                    title="Estimated API cost breakdown"
-                  >
-                    <DollarSign size={13} />
-                    <span>${costEstimate.toFixed(4)}</span>
-                  </div>
-                )}
-              </div>
-            )}
 
-            {/* Executive Summary / Key Takeaways Card */}
-            {executiveSummary && (
-              <div className="summary-card">
-                <div className="summary-card-header">
-                  <Sparkles size={16} className="text-primary" />
-                  <h3>Executive Summary & Key Takeaways</h3>
-                </div>
-                <div className="summary-card-content">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {executiveSummary}
-                  </ReactMarkdown>
-                </div>
-              </div>
-            )}
+
+
 
             {/* Format Tabs */}
             <div className="format-tabs">

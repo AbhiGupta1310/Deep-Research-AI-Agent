@@ -17,8 +17,8 @@ body {
     system-ui,
     -apple-system,
     sans-serif;
-  background-color: #06061a;
-  color: #e8e8f0;
+  background-color: #FCF7F1;
+  color: #1A1A1A;
   min-height: 100vh;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
@@ -31,9 +31,10 @@ body {
 }
 
 a {
-  color: #a78bfa;
+  color: #ffffff;
   text-decoration: none;
+  transition: color 0.2s ease;
 }
 a:hover {
-  color: #c4b5fd;
+  color: #cccccc;
 }

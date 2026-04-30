@@ -53,7 +53,8 @@ class SearchQuery(BaseModel):
 class Queries(BaseModel):
     """Collection of search queries."""
     queries: List[SearchQuery] = Field(
-        description="List of web search queries.",
+        description="List of web search queries. STRICT MAXIMUM of 3 queries.",
+        max_length=3
     )
 
 

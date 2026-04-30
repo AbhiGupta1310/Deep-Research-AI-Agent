@@ -108,4 +108,5 @@ class EventTypes:
     SYNTHESIS_WRITING = "synthesis_writing"
     COMPILING_OUTPUT = "compiling_output"
     REPORT_READY = "report_ready"
+    PLAN_REVIEW_REQUIRED = "plan_review_required"
     ERROR = "error"

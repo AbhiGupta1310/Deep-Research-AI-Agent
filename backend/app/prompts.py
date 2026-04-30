@@ -69,20 +69,17 @@ Topic for this section:
 Hypothetical ideal answer (HyDE context) for the overall report:
 {hyde_context}
 
-When generating {number_of_queries} search queries, ensure diversity by covering these angles:
-1. **Factual/Data**: Queries seeking specific statistics, benchmarks, or metrics
-2. **Conceptual**: Queries exploring core concepts, definitions, and theoretical frameworks
-3. **Practical/Applied**: Queries for real-world examples, case studies, implementations
-4. **Comparative**: Queries comparing with alternatives, competitors, or related approaches
-5. **Recent/Trends**: Queries targeting recent developments (include current year markers)
+CRITICAL REQUIREMENT: You MUST generate EXACTLY 3 search queries for this section. These queries MUST be categorically different to ensure comprehensive coverage:
+1. **Query 1 (Technical/Architectural)**: Focus on technical implementation, architecture, and core mechanics.
+2. **Query 2 (Industry/Diversity)**: Focus on industry diversity, multiple sectors, and practical use cases across different domains.
+3. **Query 3 (Recent News/Trends)**: Focus on recent news, market developments, and emerging trends in the current year.
 
 Your queries should be:
-- EXTREMELY concise (under 8-10 words). For academic sources (like Arxiv), strictly use keyword combinations (e.g., "MLOps pipeline architecture benchmark") instead of natural language sentences.
-- Specific enough to avoid generic results
-- Technical enough to capture detailed information
-- Diverse enough to cover the section from multiple angles
-- Informed by the HyDE context to improve relevance
-- Focused on authoritative sources (documentation, academic papers, technical blogs)"""
+- EXTREMELY concise (under 8-10 words).
+- Specific enough to avoid generic results.
+- Technical enough to capture detailed information.
+- Informed by the HyDE context to improve relevance.
+- Focused on authoritative sources (documentation, academic papers, technical blogs)."""
 
 SECTION_WRITER_PROMPT = """You are an expert technical writer crafting one specific section of a technical report.
 
@@ -246,43 +243,46 @@ IMPORTANT: The HyDE generation is NOT a real answer — it's a "search anchor" t
 # v2.0 — Final Synthesis Prompt (Premium LLM)
 # ============================================================
 
-FINAL_SYNTHESIS_PROMPT = """You are a world-class research report writer. Synthesize the following researched sections into a polished, cohesive final report.
+FINAL_SYNTHESIS_PROMPT = """You are a world-class Editor-in-Chief and technical research writer. Your task is to synthesize the following researched sections into a polished, definitive, and cohesive final report.
 
 Topic: {topic}
 
 Researched Sections:
 {research_sections}
 
-Sections you need to write from scratch (using the researched content as context): {non_research_section_names}
+Sections to be bridged/written: {non_research_section_names}
 
-Your task:
+Your primary mission is to act as a singular professional voice. You have the editorial authority to:
+- **Restructure & Bridge**: Create smooth transitions and a logical narrative arc.
+- **Narrative Expansion**: If a section is brief but contains critical insights, expand its implications using the broader context from other sections.
+- **Aggressive Deduplication**: If a fact, statistic, or framework (e.g., POLARIS) appears in multiple sections, consolidate it into the most relevant section and remove it elsewhere.
+- **Merge & Prune**: If two sections are redundant or overlap significantly, merge them into a single high-impact section.
 
-1. **Write an Executive Summary** (3-5 bullet key takeaways) at the very top, prefixed with `# {topic}`
+Detailed Tasks:
 
-2. **Write an Introduction** (~100 words):
-   - Scope the report based on what was actually researched
-   - Set reader expectations
-   - Use a clear narrative arc
+1. **Write an Introduction** (~100-150 words):
+   - Scope the report precisely.
+   - Establish a compelling narrative hook.
+   - Set clear expectations for what this research covers.
 
-3. **Integrate Research Sections**:
-   - Include ALL researched sections in their original order
-   - Smooth transitions between sections
-   - Fix any inconsistencies between sections
-   - Ensure the narrative flows logically
+2. **Integrate & Polish Sections**:
+   - Synthesize all provided content into a cohesive body.
+   - Ensure a consistent technical level and tone throughout.
+   - Fix all internal contradictions or formatting inconsistencies.
 
-4. **Write a Conclusion** (~150 words):
-   - Distill the most important findings
-   - Include 1 structural element (table or list) summarizing key points
-   - End with forward-looking insights or implications
+3. **Write a Master Conclusion** (~150-200 words):
+   - Distill the "so what?" of the research.
+   - Include 1 high-value structural element (focused table or list) summarizing the key findings.
+   - End with forward-looking industry implications or strategic next steps.
 
-5. **Quality Standards**:
-   - Professional, technical tone
-   - No marketing language
-   - STRICTLY retain original currencies (e.g., INR, ₹, €, £). Do NOT convert or hallucinate USD ($) if the sources mention other currencies.
-   - Use proper Markdown formatting throughout
-   - Include a Sources section at the very end compiling all cited sources. You MUST format each source as a clickable Markdown link using the format: `- [Title](URL)`. Do not just list the titles.
+4. **Quality Standards**:
+   - Professional, authoritative, and technical tone.
+   - NO marketing fluff or filler phrases.
+   - STRICTLY retain original currencies (INR, ₹, €, £).
+   - Use high-quality Markdown formatting.
+   - Include a comprehensive "Sources" section at the end with clickable links: `- [Title](URL)`.
 
-The final output should be a complete, publication-ready Markdown document."""
+The final output must be a publication-ready Markdown document that feels written by a single expert, not a collection of sub-agents."""
 
 # ============================================================
 # v2.0 — Adaptive Search Router Prompt

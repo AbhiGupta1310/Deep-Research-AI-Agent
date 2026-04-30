@@ -1,4 +1,5 @@
 from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import MemorySaver
 from .state import ReportState, ReportStateInput, ReportStateOutput, SectionState, SectionOutputState
 from .nodes import (
     query_analyzer_hyde,
@@ -85,7 +86,12 @@ def create_reporter_agent():
     builder.add_edge("final_synthesis_writer", "output_compiler")
     builder.add_edge("output_compiler", END)
 
-    return builder.compile()
+    checkpointer = MemorySaver()
+
+    return builder.compile(
+        checkpointer=checkpointer,
+        interrupt_after=["generate_report_plan"]
+    )
 
 
 reporter_agent = create_reporter_agent()

@@ -27,6 +27,7 @@ from .search import (
     NewsSearchProvider,
 )
 from .search.merger import ResultMerger, format_ranked_results
+from .search.jina import JinaReader
 from .prompts import (
     DEFAULT_REPORT_STRUCTURE,
     REPORT_PLAN_QUERY_GENERATOR_PROMPT,
@@ -50,7 +51,14 @@ _arxiv = ArxivSearchProvider()
 _wikipedia = WikipediaSearchProvider()
 _news = NewsSearchProvider()
 _merger = ResultMerger()
+_jina = JinaReader()
 
+# Rate limiting semaphore for external search providers (prevents HTTP 429s)
+_search_api_semaphore = asyncio.Semaphore(4)
+
+async def _rate_limited_search(coro):
+    async with _search_api_semaphore:
+        return await coro
 
 import warnings
 
@@ -266,7 +274,7 @@ async def query_rewriter_expander(state: SectionState):
 
     print(f"--- Rewriting Queries for Section: {section.name} (Depth: {depth}) ---")
 
-    number_of_queries = 1 if depth == "quick" else 2
+    number_of_queries = 3
     structured_llm = get_cheap_llm().with_structured_output(Queries)
 
     system_instructions = REPORT_SECTION_QUERY_GENERATOR_PROMPT.format(
@@ -285,11 +293,13 @@ async def query_rewriter_expander(state: SectionState):
         ]
     )
 
+    final_queries = search_queries.queries[:number_of_queries]
+
     print(
-        f"--- Query Rewriting for Section: {section.name} Complete ({len(search_queries.queries)} queries) ---"
+        f"--- Query Rewriting for Section: {section.name} Complete ({len(final_queries)} queries) ---"
     )
 
-    return {"search_queries": search_queries.queries}
+    return {"search_queries": final_queries}
 
 
 # ============================================================
@@ -367,21 +377,21 @@ async def multi_source_search(state: SectionState):
 
         if route.use_tavily:
             provider_tasks.append(
-                _tavily.search(route.query, num_results=tavily_results)
+                _rate_limited_search(_tavily.search(route.query, num_results=tavily_results))
             )
 
         if route.use_wikipedia:
-            provider_tasks.append(_wikipedia.search(route.query, num_results=1))
+            provider_tasks.append(_rate_limited_search(_wikipedia.search(route.query, num_results=1)))
 
         if route.use_news:
-            provider_tasks.append(_news.search(route.query, num_results=1))
+            provider_tasks.append(_rate_limited_search(_news.search(route.query, num_results=1)))
 
         if route.use_arxiv:
-            provider_tasks.append(_arxiv.search(route.query, num_results=1))
+            provider_tasks.append(_rate_limited_search(_arxiv.search(route.query, num_results=1)))
 
         # Fallback if LLM predicted NO providers:
         if not provider_tasks:
-            provider_tasks.append(_tavily.search(route.query, num_results=1))
+            provider_tasks.append(_rate_limited_search(_tavily.search(route.query, num_results=1)))
 
         results = await asyncio.gather(*provider_tasks, return_exceptions=True)
 
@@ -448,8 +458,26 @@ async def result_merger_ranker(state: SectionState):
         top_k=10,
     )
 
+    # --- Selective Deep Extraction (Jina Reader) ---
+    # Take the top 2 absolute best URLs and fetch their full markdown content.
+    # This provides the writer with deep context without crashing memory with 30+ sites.
+    top_2_sources = ranked_sources[:2]
+    print(f"--- Jina Deep Extraction for Top 2 Sources in \"{section_name}\" ---")
+    
+    extraction_tasks = [
+        _jina.fetch_markdown(s.url) for s in top_2_sources
+    ]
+    extracted_contents = await asyncio.gather(*extraction_tasks)
+    
+    # Inject extracted content back into the ranked sources
+    for i, content in enumerate(extracted_contents):
+        if content:
+            # We append the deep content to the existing snippet to give the LLM both
+            ranked_sources[i].content = f"--- FULL CONTENT START ---\n{content[:15000]}\n--- FULL CONTENT END ---\n\nORIGINAL SNIPPET: {ranked_sources[i].content}"
+            print(f"    [Jina] Successfully extracted {len(content)} chars for: {ranked_sources[i].url}")
+
     # Format for LLM context
-    source_str = format_ranked_results(ranked_sources, max_tokens=12000)
+    source_str = format_ranked_results(ranked_sources, max_tokens=25000)
 
     # Convert to dicts for state storage
     search_results_dicts = [s.to_dict() for s in ranked_sources]
