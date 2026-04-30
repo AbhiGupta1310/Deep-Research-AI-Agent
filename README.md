@@ -258,6 +258,13 @@ Handles the terminal node logic. It generates a safe filename from the topic, re
 ./run_app.sh
 ```
 
+### Docker (Backend Only)
+```bash
+cd backend
+docker build -t deep-research-backend .
+docker run -p 8000:8000 --env-file .env deep-research-backend
+```
+
 ---
 
 ## API Endpoints
