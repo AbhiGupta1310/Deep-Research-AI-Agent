@@ -29,6 +29,7 @@ numpy>=1.24.0
 
 # Output & Formatting (lightweight)
 markdown>=3.5.0
+weasyprint>=60.0
 
 # Observability
 langsmith>=0.1.0
