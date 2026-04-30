@@ -92,8 +92,6 @@ END
 
 ## Pipeline Walkthrough
 
-![LangGraph Pipeline](assets/img2.png)
-
 ### Stage 1 — Query Analysis & Cache Check (`query_analyzer_hyde`)
 
 The entry point of every run:
